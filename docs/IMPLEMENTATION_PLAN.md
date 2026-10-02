@@ -342,6 +342,13 @@ expired OTP → 401, kicked token → 401, and that `/retrieve` returns at most
 
 ## Phase 3 — Member client and fusion (`rag/remote.py`)
 
+> **STATUS: DONE.** Deviations: remote timeout is 120 s (`REMOTE_TIMEOUT`), not 30 s, because a cold Hybrid query on
+> the 16 GB DB can take ~100 s; partition ids are namespaced per origin as well as chunk ids; fusion takes the
+> most permissive threshold / largest chunk budget of the corpora involved; a member with no local corpus uses a
+> hidden empty "scratch" engine for select/answer; a single local corpus with no hosts takes the unchanged
+> `_run_rag` path. Verified with a real host on localhost and a member with a separate data dir (storage < 64 KB,
+> no document bytes after joining).
+
 - `joins(id PK, host_url, corpus_name, display_name, token, partition_keywords_json, joined_at)`
   in the **member's** `state.db`. This is the only thing stored for a host. There are no chunk tables
   and no files. (The token is a bearer secret in a local file, which is acceptable for a desktop app. Mention it in the UI.)

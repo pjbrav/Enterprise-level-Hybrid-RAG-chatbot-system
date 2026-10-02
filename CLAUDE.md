@@ -9,7 +9,8 @@ Roadmap: `docs/IMPLEMENTATION_PLAN.md` (Phase 0 cleanup done; Phases 1-7 = host/
   `rankers`, `providers` -> `engine` (`ComparisonEngine`) -> `cli`. `state` (corpora registry, `data/state.db`)
   and `corpora` (`CorpusManager`: create/attach/ingest/delete + engine cache) sit on top. `retrieval` holds the
   retrieve->select->answer data types (`RetrievalResult`, `ChunkStore`, wire format); `hosting` is the read-only
-  FastAPI host API + OTP/membership (`HostServer`).
+  FastAPI host API + OTP/membership (`HostServer`); `remote` is the member side (`join_host`, `RemoteCorpus`,
+  `FederatedSearch`: search any mix of local corpora and joined hosts; host chunks stay in RAM, never on disk).
 - One corpus = one SQLite file (`data/corpora/<id>.db`) or one Postgres schema (`corpus_<id>`); attached DBs are read-only.
 - `v24.py` - thin compatibility shim re-exporting `rag.*`. Edit `rag/`, never `v24.py`.
 - `app.py` - Gradio UI. `scripts/` - eval harness and DB maintenance. `tests/` - unit tests.

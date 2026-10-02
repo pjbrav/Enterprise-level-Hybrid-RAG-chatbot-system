@@ -54,6 +54,22 @@ class Membership:
     last_seen: str
 
 
+@dataclass
+class JoinRecord:
+    """A shared corpus this machine has joined. This is ALL that is stored for
+    a host: where it is, the membership token, and a few routing keywords --
+    never chunks, files or a copy of the database."""
+    id: int
+    host_url: str
+    corpus_name: str
+    display_name: str
+    token: str
+    partition_keywords: Dict[str, List[str]]
+    joined_at: str
+    status: str = "active"       # 'active' | 'revoked'
+    last_error: str = ""
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -102,6 +118,15 @@ class StateStore:
                 "retained INTEGER NOT NULL DEFAULT 1, "
                 "partition_keywords_json TEXT NOT NULL DEFAULT '{}', "
                 "created_at TEXT NOT NULL)"
+            )
+            # Member side: shared corpora this machine has joined (no corpus data).
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS joins ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, host_url TEXT NOT NULL, corpus_name TEXT NOT NULL, "
+                "display_name TEXT NOT NULL, token TEXT NOT NULL, "
+                "partition_keywords_json TEXT NOT NULL DEFAULT '{}', joined_at TEXT NOT NULL, "
+                "status TEXT NOT NULL DEFAULT 'active', last_error TEXT NOT NULL DEFAULT '', "
+                "UNIQUE (host_url, corpus_name))"
             )
             # Host-side only: members never receive these tables' contents.
             conn.execute(
@@ -339,3 +364,43 @@ class StateStore:
     def leave(self, token: str) -> bool:
         with self._conn() as conn:
             return conn.execute("DELETE FROM memberships WHERE token_hash = ?", (_sha256(token),)).rowcount > 0
+
+    # -- joins (member side) ------------------------------------------------------
+    @staticmethod
+    def _row_to_join(r: sqlite3.Row) -> JoinRecord:
+        return JoinRecord(r["id"], r["host_url"], r["corpus_name"], r["display_name"], r["token"],
+                          json.loads(r["partition_keywords_json"] or "{}"), r["joined_at"],
+                          r["status"], r["last_error"])
+
+    def add_join(self, host_url: str, corpus_name: str, display_name: str, token: str,
+                 partition_keywords: Optional[Dict[str, List[str]]] = None) -> JoinRecord:
+        """Record a membership. Re-joining the same host/corpus replaces the old token."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO joins (host_url, corpus_name, display_name, token, partition_keywords_json, joined_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (host_url, corpus_name) DO UPDATE SET "
+                "display_name = excluded.display_name, token = excluded.token, "
+                "partition_keywords_json = excluded.partition_keywords_json, status = 'active', last_error = ''",
+                (host_url, corpus_name, display_name, token, json.dumps(partition_keywords or {}),
+                 datetime.now().isoformat(timespec="seconds")))
+            row = conn.execute("SELECT * FROM joins WHERE host_url = ? AND corpus_name = ?",
+                               (host_url, corpus_name)).fetchone()
+        return self._row_to_join(row)
+
+    def get_join(self, join_id: int) -> Optional[JoinRecord]:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM joins WHERE id = ?", (join_id,)).fetchone()
+        return self._row_to_join(row) if row else None
+
+    def list_joins(self) -> List[JoinRecord]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM joins ORDER BY joined_at, id").fetchall()
+        return [self._row_to_join(r) for r in rows]
+
+    def set_join_status(self, join_id: int, status: str, error: str = "") -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE joins SET status = ?, last_error = ? WHERE id = ?", (status, error, join_id))
+
+    def remove_join(self, join_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM joins WHERE id = ?", (join_id,))

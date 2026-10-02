@@ -128,8 +128,20 @@ class CorpusManager:
             with self._lock:
                 self._engines[corpus_id] = built
                 while len(self._engines) > self.max_engines:
-                    self._engines.popitem(last=False)
+                    oldest = next(k for k in self._engines if k != "__scratch__")
+                    self._engines.pop(oldest)
             return built
+
+    def scratch_engine(self) -> Any:
+        """An engine over an empty hidden database. A member who only joined a host
+        (no local corpus) needs *an* engine for select/answer; the chunk data comes
+        from the request's ChunkStore, so this database stays empty."""
+        with self._lock:
+            if "__scratch__" not in self._engines:
+                path = self.corpora_dir / "_scratch.db"
+                self._engines["__scratch__"] = build_large_corpus_engine(db_path=str(path), database_url="")
+            self._engines.move_to_end("__scratch__")
+            return self._engines["__scratch__"][2]
 
     def invalidate(self, corpus_id: str) -> None:
         with self._lock:

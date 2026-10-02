@@ -5,7 +5,7 @@ Install in development mode:
     pip install -e .
 
 Then import from any project:
-    from v24 import build_large_corpus_engine
+    from v23 import build_large_corpus_engine
 """
 
 from setuptools import setup, find_packages
@@ -17,7 +17,7 @@ setup(
     long_description=open("README.md").read() if __import__("os").path.exists("README.md") else "",
     long_description_content_type="text/markdown",
     python_requires=">=3.10",
-    py_modules=["v24"],  # v23.py is a single-module package
+    py_modules=["v23"],  # v23.py is a single-module package
     install_requires=[
         "numpy>=1.24",
         "pandas>=2.0",

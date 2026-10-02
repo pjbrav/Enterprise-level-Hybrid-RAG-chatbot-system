@@ -1,0 +1,162 @@
+[
+  {
+    "eval_id": "AVL-2026-L3-101",
+    "complexity_level": 3,
+    "domain": "Cross-Entity HR Policy Synthesis",
+    "question": "Summarize the conflicting remote work benefit policies between AVL's US and EMEA entities, including specific dollar/amount differences for a full-remote employee with on-call duties.",
+    "ground_truth_answer": "The US and EMEA entities have materially different remote work benefit policies. For a full-remote employee with on-call duties, the US entity maximum annual benefit is $6,770 ($5,320 base maximum + $1,800 on-call surcharge), while the EMEA entity maximum is approximately $3,480 USD (€3,000 converted at current rates). The disparity is approximately $3,290 per year favoring the US entity. Key differences include: (1) Base stipend: US pays $350/month ($4,200/year) vs EMEA €180/month (€2,160/year ≈ $2,300 USD); (2) Internet: US provides $80/month ($960/year) vs EMEA €50/month (€600/year ≈ $640 USD); (3) On-call surcharge: US provides $150/month ($1,800/year) vs EMEA €80/month (€960/year ≈ $1,020 USD). Additionally, the US entity provides a $1,200 one-time equipment provision while EMEA provides only €800. The EMEA policy is also subject to additional EU compliance requirements including working time directives and home network security assessments.",
+    "required_context_nodes": [
+      {
+        "document_id": "HR-POL-030-US-TOTAL",
+        "file_path": "documents/hr/HR-POL-030_Remote_Work_US.md",
+        "critical_text_snippet": "Total Maximum Annual Stipend (US Entity): Under normal circumstances, the maximum total annual remote work benefit per employee is $5,320 ($4,200 base + $1,800 internet reimbursement, excluding the one-time equipment provision of $1,200 and the on-call surcharge of $150/month if applicable."
+      },
+      {
+        "document_id": "HR-POL-030-US-ONCALL",
+        "file_path": "documents/hr/HR-POL-030_Remote_Work_US.md",
+        "critical_text_snippet": "High-Intensity Remote Worker Surcharge: $150/month, bringing the full remote stipend to $500/month ($6,000 annually)."
+      },
+      {
+        "document_id": "HR-POL-030-EMEA-TOTAL",
+        "file_path": "documents/hr/HR-POL-030-EMEA_Remote_Work.md",
+        "critical_text_snippet": "Total Maximum Annual Stipend (EMEA Entity): Under normal circumstances, the maximum total annual remote work benefit per employee is €3,000 (€2,160 base + €600 internet + €240 on-call surcharge), which converts to approximately $3,200 USD at current exchange rates."
+      },
+      {
+        "document_id": "HR-POL-030-EMEA-ONCALL",
+        "file_path": "documents/hr/HR-POL-030-EMEA_Remote_Work.md",
+        "critical_text_snippet": "On-Call and Critical Duties Surcharge: €80/month (approximately $85 USD), bringing the full remote stipend for critical-duty remote workers to €260/month maximum (approximately $280 USD)."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["$6,770", "$3,480", "$3,290 disparity", "$5,320", "€3,000", "on-call", "stipend difference"],
+      "negative_constraints": ["benefits are equivalent", "EMEA pays more", "$5,320 equals €3,000", "no conflict exists"]
+    },
+    "source_documents": ["documents/hr/HR-POL-030_Remote_Work_US.md", "documents/hr/HR-POL-030-EMEA_Remote_Work.md"],
+    "tags": ["synthesis", "contradiction", "hr", "benefit-disparity", "cross-entity", "currency-conversion", "policy-comparison"]
+  },
+  {
+    "eval_id": "AVL-2026-L3-115",
+    "complexity_level": 3,
+    "domain": "Cross-Document Policy Contradiction Analysis",
+    "question": "Identify and explain the contradictions or inconsistencies between AVL's incident management escalation policy and its regional governance matrix regarding the 'Critical Exception' approval process. Does the RGM-2026 add any requirements beyond what OP-204 specifies?",
+    "ground_truth_answer": "There are no direct contradictions between SOP OP-204 and RGM-2026 — rather, RGM-2026 adds specific operational details that complement OP-204's general framework. OP-204 Section 4.2 establishes that incidents exceeding $10,000 from a Tier-2 incident are 'Critical Exceptions' requiring 'formal written sign-off of the respective Regional Operations Vice President.' RGM-2026 Section 4 elaborates by adding: (1) the specific VP must be identified per Table 2A (not just 'the' VP); (2) 'verbal or phone approval is insufficient; a signed document must be filed in the AVL Global Incident Registry (GIR)'; (3) if the designated VP is unavailable for 8+ hours, escalation goes to the COO. The key consistency point is that both documents require Regional VP sign-off for Critical Exceptions. The main addition in RGM-2026 is the unavailability escalation protocol (COO takeover after 8 hours), which OP-204 does not address.",
+    "required_context_nodes": [
+      {
+        "document_id": "OP-204-CRIT-EXC",
+        "file_path": "documents/operations/OP-204_Incident_Management_v4.md",
+        "critical_text_snippet": "Section 4.2: Critical Exceptions bypass local managers and strictly require the formal written sign-off of the respective Regional Operations Vice President."
+      },
+      {
+        "document_id": "RGM-2026-CRIT-EXC-PROTOCOL",
+        "file_path": "documents/governance/RGM-2026_Regional_Governance_Matrix.md",
+        "critical_text_snippet": "Section 4: The incident must be assigned to the Regional Operations Vice President listed in Table 2A for the applicable region. The Regional Vice President must provide formal written sign-off before any corrective expenditure exceeding $10,000 may be authorized. Verbal or phone approval is insufficient; a signed document must be filed in the AVL Global Incident Registry (GIR). If the designated Regional Vice President is unavailable for more than 8 hours, the matter escalates to the Chief Operating Officer."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["no contradiction", "RGM-2026 adds", "8 hours unavailability", "COO escalation", "GIR filing", "verbal insufficient"],
+      "negative_constraints": ["they contradict each other", "OP-204 requires verbal approval", "no escalation exists"]
+    },
+    "source_documents": ["documents/operations/OP-204_Incident_Management_v4.md", "documents/governance/RGM-2026_Regional_Governance_Matrix.md"],
+    "tags": ["synthesis", "policy-analysis", "contradiction-check", "escalation", "governance"]
+  },
+  {
+    "eval_id": "AVL-2026-L3-129",
+    "complexity_level": 3,
+    "domain": "Cross-Domain Supply Chain & Financial Risk Assessment",
+    "question": "An EMEA Regional Operations Director needs to place an emergency order for H2-NEX-008 (power distribution unit) from EuroVolt GmbH, and the order total is $38,000. Assess the authorization chain: Who can approve, what documentation is required, and what additional compliance steps must be completed?",
+    "ground_truth_answer": "The authorization chain is as follows: (1) The EMEA Regional Operations Director (Marcus Vance's region) can authorize emergency procurement of $5,001–$50,000, which covers $38,000. Per FIN-AUTH-101, the Director must obtain prior verbal approval and provide written confirmation within 24 hours. (2) The supplier is confirmed as qualified: EuroVolt GmbH (EUR-001) is listed in AVL-PUR-012 as the 'Preferred (EMEA only)' alternate supplier for H2-NEX-008. (3) Additional compliance: because this is emergency procurement, the transaction must be logged in the AVL Global Incident Registry (per RGM-2026 Section 4). (4) The RGM-2026 specifies that EuroVolt GmbH is Germany-based, so GDPR compliance for data handling may apply if personal data is involved in the procurement process. (5) Marcus Vance (as Regional VP, not Director) would need to be notified per the governance matrix, and he holds authority limits of $100,000 per transaction and 15% budget variance — but since this falls within the Director's authorization, VP approval is not strictly required, only notification.",
+    "required_context_nodes": [
+      {
+        "document_id": "FIN-AUTH-101-EMERG-COSTS",
+        "file_path": "documents/finance/FIN-AUTH-101_Authorization_Framework.md",
+        "critical_text_snippet": "$5,001 – $50,000: Regional Operations Director must approve prior to commitment (verbal approval acceptable, written confirmation within 24 hours)."
+      },
+      {
+        "document_id": "AVL-PUR-012-EUROVOLT-DETAILS",
+        "file_path": "documents/supply_chain/AVL-PUR-012_Supplier_Qualification.md",
+        "critical_text_snippet": "EUR-001: EuroVolt GmbH — Preferred (EMEA only) — H2-NEX-008 (Power distribution, EMEA alternate) — Regional Restrictions: EMEA region only (Germany-based)."
+      },
+      {
+        "document_id": "BOM-FLT-H2NEX-EUROVOLT-EMEA",
+        "file_path": "documents/supply_chain/BOM-FLT-H2NEX.md",
+        "critical_text_snippet": "EMEA-Specific Supply Constraints: EuroVolt GmbH (alternate supplier for H2-NEX-008 power distribution units) is the ONLY qualified alternate supplier for the EMEA region. In the event of supply disruption, procurement must escalate to the Regional Operations Director per FIN-AUTH-101 Section 3."
+      },
+      {
+        "document_id": "RGM-2026-DIR-AUTH",
+        "file_path": "documents/governance/RGM-2026_Regional_Governance_Matrix.md",
+        "critical_text_snippet": "Regional Operations Director: $25,000 max per transaction, $100,000 max per month, 10% budget variance."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["$38,000 within $50,000 limit", "verbal + 24hr written confirmation", "EuroVolt GmbH qualified", "EMEA only", "GIR registration", "Marcus Vance notification"],
+      "negative_constraints": ["CFO approval required", "Board approval required", "$25,000 limit (wrong bracket)", "Atlas Hydraulic"]
+    },
+    "source_documents": ["documents/finance/FIN-AUTH-101_Authorization_Framework.md", "documents/supply_chain/AVL-PUR-012_Supplier_Qualification.md", "documents/supply_chain/BOM-FLT-H2NEX.md", "documents/governance/RGM-2026_Regional_Governance_Matrix.md"],
+    "tags": ["synthesis", "supply-chain", "finance", "emergency-procurement", "cross-document", "EMEA", "authorization-chain"]
+  },
+  {
+    "eval_id": "AVL-2026-L3-143",
+    "complexity_level": 3,
+    "domain": "Cross-Entity Compliance & HR Policy Conflicts",
+    "question": "A Frankfurt-based AVL employee working remotely requests a home office chair reimbursement. Analyze whether they are entitled to this benefit under either the US or EMEA remote work policies, and explain the policy conflict.",
+    "ground_truth_answer": "The employee is NOT entitled to a home office chair reimbursement under either policy. The US entity policy (HR-POL-030) explicitly states that an 'ergonomic chair (employee-purchased, reimbursed up to $600)' is provided as part of the standard home office kit — so US employees get up to $600 chair reimbursement. However, the EMEA entity policy (HR-POL-030-EMEA) explicitly states: 'no chair stipend provided' — the home office kit includes 'ergonomic accessories (keyboard, mouse, footrest)' but no chair. Since this employee works for the EMEA entity (AeroVelo Logistics EMEA GmbH), the EMEA policy applies, and they are not entitled to a chair reimbursement. The employee may request a footrest, which IS included in the EMEA equipment provision. The conflict highlights a deliberate policy divergence between entities, not an oversight.",
+    "required_context_nodes": [
+      {
+        "document_id": "HR-POL-030-USD-EQUIP",
+        "file_path": "documents/hr/HR-POL-030_Remote_Work_US.md",
+        "critical_text_snippet": "AVL provides a standard home office kit valued at $1,200 (one-time): Ergonomic chair (employee-purchased, reimbursed up to $600)."
+      },
+      {
+        "document_id": "HR-POL-030-EMEA-EQUIP",
+        "file_path": "documents/hr/HR-POL-030-EMEA_Remote_Work.md",
+        "critical_text_snippet": "AVL provides a standard home office kit valued at €800 (one-time): Ergonomic accessories (keyboard, mouse, footrest) — no chair stipend provided."
+      },
+      {
+        "document_id": "HR-POL-030-ENTITY-DISCLAIMER",
+        "file_path": "documents/hr/HR-POL-030_Remote_Work_US.md",
+        "critical_text_snippet": "This policy applies exclusively to the US entity (AeroVelo Logistics US, LLC). The EMEA entity operates under HR-POL-030-EMEA, which contains materially different provisions regarding remote work stipends."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["NOT entitled", "no chair stipend provided", "EMEA entity", "HR-POL-030-EMEA applies", "$600 (US only)"],
+      "negative_constraints": ["chair is provided", "EMEA provides chair reimbursement", "they get $600", "US policy applies to EMEA"]
+    },
+    "source_documents": ["documents/hr/HR-POL-030_Remote_Work_US.md", "documents/hr/HR-POL-030-EMEA_Remote_Work.md"],
+    "tags": ["synthesis", "contradiction", "hr", "equipment", "entity-specific", "policy-conflict", "EMEA"]
+  },
+  {
+    "eval_id": "AVL-2026-L3-157",
+    "complexity_level": 3,
+    "domain": "Cross-Document Vendor Contract & Budget Risk Analysis",
+    "question": "AVL is considering a 4-year contract renewal with Atlas Hydraulic Systems (ATL-001) at a 18% increase over the previous contract value. Assess the procurement compliance requirements, identify any conflicts between documents, and determine the approval chain.",
+    "ground_truth_answer": "This contract renewal triggers several compliance requirements across multiple documents: (1) Per FIN-AUTH-101 Section 4.1, contracts within 15% of the previous value may be renewed without competitive bidding. However, an 18% increase EXCEEDS the 15% threshold, meaning 'full competitive re-procurement' is required. (2) Because Atlas Hydraulic Systems (ATL-001) is a 'Strategic' supplier (per AVL-PUR-012), the contract renewal requires the same authorization level as a new Strategic contract. (3) The H2-Nexus system uses 4 Valve-B units at $185,000 each = $740,000 per H2-Nexus system. If the 4-year contract annual value exceeds $500,000 (which it likely does for a strategic hydraulic supplier), the authorization requires both CFO and Regional VP approval, plus a 5-quote minimum RFP process (per FIN-AUTH-101 Table 3). (4) The 18% increase means competitive re-procurement, but because Atlas is 'Strategic' and a sole source for Valve-B (along with clamping mechanisms), the RFP may face genuine supply constraints — only Hydratech Industries is listed as an alternate for Valve-B. (5) Approval chain: CFO + Regional VP (Marcus Vance for EMEA units, Sarah Jenkins for Americas units), with an independent evaluation panel required for the RFP.",
+    "required_context_nodes": [
+      {
+        "document_id": "FIN-AUTH-101-CONTRACT-RENEWAL",
+        "file_path": "documents/finance/FIN-AUTH-101_Authorization_Framework.md",
+        "critical_text_snippet": "Contracts within 15% of previous contract value may be renewed at the same authorization level without competitive bidding. Contracts with >15% increase require full competitive re-procurement."
+      },
+      {
+        "document_id": "FIN-AUTH-101-CONTRACT-THRESHOLDS",
+        "file_path": "documents/finance/FIN-AUTH-101_Authorization_Framework.md",
+        "critical_text_snippet": "$500,000 – $2,000,000/year: CFO + Regional VP. Contract Length: 5 years. Competitive Bidding: 5 quotes minimum + RFP process."
+      },
+      {
+        "document_id": "AVL-PUR-012-ATLAS",
+        "file_path": "documents/supply_chain/AVL-PUR-012_Supplier_Qualification.md",
+        "critical_text_snippet": "ATL-001: Atlas Hydraulic Systems — Strategic — H2-NEX-001 (Valves), H2-NEX-005 (Clamping) — Americas and APAC only."
+      },
+      {
+        "document_id": "BOM-FLT-H2NEX-VALVE-COST",
+        "file_path": "documents/supply_chain/BOM-FLT-H2NEX.md",
+        "critical_text_snippet": "H2-NEX-001: Hydraulic lifting mechanism (dual-stage): $185,000 x 4 units = $740,000 per system. H2-NEX-005: Container clamping mechanism (hydraulic): $34,000 x 6 units = $204,000 per system. Source: Atlas Hydraulic Systems (primary) / Hydratech Industries (alternate)."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["18% exceeds 15% threshold", "competitive re-procurement required", "$740,000+ value", "CFO + Regional VP", "5-quote RFP", "independent evaluation panel", "strategic supplier"],
+      "negative_constraints": ["renewal without bidding", "no competitive bidding needed", "Regional Director can approve", "simple renewal"]
+    },
+    "source_documents": ["documents/finance/FIN-AUTH-101_Authorization_Framework.md", "documents/supply_chain/AVL-PUR-012_Supplier_Qualification.md", "documents/supply_chain/BOM-FLT-H2NEX.md"],
+    "tags": ["synthesis", "procurement-compliance", "vendor-contract", "strategic-supplier", "competitive-bidding", "risk-assessment", "budget-impact"]
+  }
+]

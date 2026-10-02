@@ -1,71 +1,43 @@
-# Routing configuration — per-deployment partition keywords.
+# Routing Configuration — per-customer partition keyword mappings
 #
-# This file overrides the hardcoded PARTITION_KEYWORDS in v24.py.
-# Each deployment creates its own version with the data sources they use.
-# If this file doesn't exist, the defaults in v24.py are used.
+# Copy this file to routing_config.yaml and edit for your deployment.
+# If this file doesn't exist, hardcoded defaults in v24.py are used.
 #
-# Example: a company using Zendesk, Notion, and Salesforce would set:
+# Keywords are matched case-insensitively against the query text.
+# If any keyword appears in the question, the corresponding partition
+# is activated for cross-domain search.
 
 partitions:
-  partition_zendesk:
-    keywords:
-      - zendesk
-      - ticket
-      - case
-      - requester
-      - assignee
-      - help desk
-
-  partition_notion:
-    keywords:
-      - notion
-      - wiki
-      - page
-      - database
-      - documentation
-
-  partition_salesforce:
-    keywords:
-      - salesforce
-      - opportunity
-      - lead
-      - account
-      - contact
-      - pipeline
-      - crm
-
-  partition_slack:
-    keywords:
-      - slack
-      - channel
-      - dm
-      - direct message
-      - slack message
-
-  partition_gmail:
-    keywords:
-      - gmail
-      - email
-      - inbox
-      - thread
-      - mail
+  partition_jira:
+    keywords: ["jira", "ticket", "epic", "sprint", "backlog", "kanban"]
 
   partition_github:
-    keywords:
-      - github
-      - pr
-      - pull request
-      - repo
-      - repository
-      - commit
-      - branch
-      - merge request
+    keywords: ["github", "pr", "pull request", "pull-request", "repo", "repository", "commit", "branch", "merge request", "merge-request"]
 
-  partition_jira:
-    keywords:
-      - jira
-      - ticket
-      - epic
-      - sprint
-      - backlog
-      - kanban
+  partition_slack:
+    keywords: ["slack", "channel", "dm", "direct message", "slack message"]
+
+  partition_gmail:
+    keywords: ["gmail", "email", "inbox", "thread", "mail"]
+
+  partition_confluence:
+    keywords: ["confluence", "wiki", "page", "documentation page"]
+
+  partition_hubspot:
+    keywords: ["hubspot", "deal", "contact", "company", "pipeline", "crm"]
+
+  partition_linear:
+    keywords: ["linear", "linear issue", "project"]
+
+  partition_fireflies:
+    keywords: ["fireflies", "meeting", "transcript", "call recording", "firefly"]
+
+  partition_google_drive:
+    keywords: ["google drive", "drive", "doc", "document", "sheet", "spreadsheet"]
+
+  # Add new partitions for new data sources here:
+  # partition_zendesk:
+  #   keywords: ["zendesk", "ticket", "case", "support request"]
+  #
+  # partition_notion:
+  #   keywords: ["notion", "page", "database", "workspace"]

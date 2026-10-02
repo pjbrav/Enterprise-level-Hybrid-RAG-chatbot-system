@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv*/
+venv*/
+.pytest_cache/
+# Secrets
+.env
+# Data - never commit
+data/
+*.db
+*.db-*
+*.parquet
+*.zip
+uploads/
+EnterpriseRAG_Docs/
+# Generated results (keep only curated ones under eval_results/)
+web_eval*
+comparison_results*
+latency_test*
+# Local config (example is committed)
+routing_config.yaml
+# Backups / IDE / OS
+*.bak
+*_pre_*
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.cache/

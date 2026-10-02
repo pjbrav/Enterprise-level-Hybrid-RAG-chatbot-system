@@ -1,0 +1,162 @@
+[
+  {
+    "eval_id": "AVL-2026-L2-042",
+    "complexity_level": 2,
+    "domain": "Global Operations & Governance",
+    "question": "An unmapped Tier-2 logistics delay has caused an unexpected $14,500 customs fine at our Frankfurt hub. According to corporate policy, which specific executive must sign off on this variance?",
+    "ground_truth_answer": "The variance must be signed off by Marcus Vance, the Vice President of EMEA Operations. According to Ops Policy OP-204, any Tier-2 logistics incident resulting in a financial impact greater than $10,000 constitutes a 'Critical Exception' requiring regional VP approval. The Regional Governance Matrix (RGM-2026) dictates that Marcus Vance holds authority over the EMEA region, which encompasses the Frankfurt hub.",
+    "required_context_nodes": [
+      {
+        "document_id": "OP-204-INCIDENT-MGMT",
+        "file_path": "documents/operations/OP-204_Incident_Management_v4.md",
+        "critical_text_snippet": "Section 4.2: Tier-2 logistical delays are categorized by financial impact. If the compounding costs, fines, or penalties of a single Tier-2 incident exceed $10,000 USD, the incident escalates to a 'Critical Exception'. Critical Exceptions bypass local managers and strictly require the formal written sign-off of the respective Regional Operations Vice President."
+      },
+      {
+        "document_id": "RGM-2026-EXEC-MATRIX",
+        "file_path": "documents/governance/RGM-2026_Regional_Governance_Matrix.md",
+        "critical_text_snippet": "EMEA Division (including Frankfurt, Amsterdam, and Dubai hubs): Marcus Vance, VP. Regional boundary clarifications: The Frankfurt hub falls under Marcus Vance's authority regardless of any prior contractual arrangements with local management."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["Marcus Vance", "EMEA", "Critical Exception", "OP-204", "Frankfurt"],
+      "negative_constraints": ["Sarah Jenkins", "local manager", "Kenji Sato", "budget variance alone (without VP reference)"]
+    },
+    "source_documents": ["documents/operations/OP-204_Incident_Management_v4.md", "documents/governance/RGM-2026_Regional_Governance_Matrix.md"],
+    "tags": ["multi-hop", "critical-exception", "emea-operations", "governance", "escalation"]
+  },
+  {
+    "eval_id": "AVL-2026-L2-015",
+    "complexity_level": 2,
+    "domain": "Finance & Operations — Emergency Procurement",
+    "question": "A power distribution unit (H2-NEX-008) fails at the Frankfurt hub, requiring emergency procurement. What is the maximum procurement limit for the Regional Operations Director under emergency provisions, and which alternate supplier can fulfill this order in the EMEA region?",
+    "ground_truth_answer": "The Regional Operations Director (Marcus Vance's region) can authorize emergency procurement up to $50,000 with prior verbal approval and written confirmation within 24 hours. The qualified alternate supplier for the EMEA region is EuroVolt GmbH, which is the ONLY qualified alternate supplier for power distribution units (H2-NEX-008) in the EMEA region. This is confirmed in the Supplier Qualification Policy (AVL-PUR-012) and the H2-Nexus Bill of Materials (BOM-FLT-H2NEX).",
+    "required_context_nodes": [
+      {
+        "document_id": "FIN-AUTH-101-EMERG",
+        "file_path": "documents/finance/FIN-AUTH-101_Authorization_Framework.md",
+        "critical_text_snippet": "$5,001 – $50,000: Regional Operations Director must approve prior to commitment (verbal approval acceptable, written confirmation within 24 hours)."
+      },
+      {
+        "document_id": "BOM-FLT-H2NEX-EUROVOLT",
+        "file_path": "documents/supply_chain/BOM-FLT-H2NEX.md",
+        "critical_text_snippet": "EMEA-Specific Supply Constraints: EuroVolt GmbH (alternate supplier for H2-NEX-008 power distribution units) is the ONLY qualified alternate supplier for the EMEA region."
+      },
+      {
+        "document_id": "AVL-PUR-012-EUROVOLT",
+        "file_path": "documents/supply_chain/AVL-PUR-012_Supplier_Qualification.md",
+        "critical_text_snippet": "EUR-001: EuroVolt GmbH — Preferred (EMEA only) — H2-NEX-008 (Power distribution, EMEA alternate) — Regional Restrictions: EMEA region only (Germany-based)."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["$50,000", "EuroVolt GmbH", "Regional Operations Director", "H2-NEX-008"],
+      "negative_constraints": ["Atlas Hydraulic", "SafetyFirst Industries", "$25,000", "Frankfurt (as supplier, not hub)"]
+    },
+    "source_documents": ["documents/finance/FIN-AUTH-101_Authorization_Framework.md", "documents/supply_chain/BOM-FLT-H2NEX.md", "documents/supply_chain/AVL-PUR-012_Supplier_Qualification.md"],
+    "tags": ["multi-hop", "emergency-procurement", "supply-chain", "finance", "EMEA"]
+  },
+  {
+    "eval_id": "AVL-2026-L2-028",
+    "complexity_level": 2,
+    "domain": "Operations & Supply Chain — Equipment Safety",
+    "question": "A Valve-B on the H2-Nexus system at the Dallas hub has exceeded its 8-year replacement cycle but continues operating. A Tier-2 incident occurs with $8,000 in direct damages. Is this incident still classified as Tier-2, or does it escalate? What authority can authorize the response?",
+    "ground_truth_answer": "This incident escalates to a Tier-3 safety event regardless of the $8,000 financial impact. SOP OP-204 explicitly states: 'Continued operation above 2,800 psi on a cycle-expired Valve-B unit constitutes a Tier-3 safety event.' Since Tier-3 incidents require notification of both the Regional Operations Vice President and the Global Compliance Officer within 4 hours, the authority to authorize the response is Sarah Jenkins (Americas VP), who has a $100,000 per-transaction limit and unilateral sign-off on Tier-3 incidents. The $8,000 financial amount alone would be Tier-2, but the regulatory/safety override takes precedence.",
+    "required_context_nodes": [
+      {
+        "document_id": "OP-204-TIER-3-OVERRIDE",
+        "file_path": "documents/operations/OP-204_Incident_Management_v4.md",
+        "critical_text_snippet": "CRITICAL NOTE: Valve-B units that have exceeded their replacement cycle must be taken offline immediately. Continued operation above 2,800 psi on a cycle-expired Valve-B unit constitutes a Tier-3 safety event under SOP OP-204."
+      },
+      {
+        "document_id": "RGM-2026-AMERAS-VP",
+        "file_path": "documents/governance/RGM-2026_Regional_Governance_Matrix.md",
+        "critical_text_snippet": "Americas Division: Sarah Jenkins, VP. Regional Operations Vice President authority: $100,000 per transaction, $1,000,000 annual budget variance."
+      },
+      {
+        "document_id": "BOM-FLT-H2NEX-VALVE",
+        "file_path": "documents/supply_chain/BOM-FLT-H2NEX.md",
+        "critical_text_snippet": "Valve-B (H2-NEX-001) — Replacement cycle: 8 years or 16,000 operating hours."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["Tier-3", "cycle-expired", "Sarah Jenkins", "$100,000"],
+      "negative_constraints": ["still Tier-2", "local manager", "budget variance (as the determining factor)"]
+    },
+    "source_documents": ["documents/operations/OP-204_Incident_Management_v4.md", "documents/governance/RGM-2026_Regional_Governance_Matrix.md", "documents/supply_chain/BOM-FLT-H2NEX.md"],
+    "tags": ["multi-hop", "safety-override", "tier-escalation", "equipment", "americas"]
+  },
+  {
+    "eval_id": "AVL-2026-L2-063",
+    "complexity_level": 2,
+    "domain": "HR & Governance — Regional Benefit Disparity",
+    "question": "An AVL employee in Frankfurt (EMEA entity) compares their maximum remote work annual benefit to a colleague in Dallas (US entity). What is the dollar-amount disparity between the two maximum benefits, and which entity provides the higher benefit?",
+    "ground_truth_answer": "The US entity provides a higher maximum benefit. The US entity maximum is $5,320 per year (HR-POL-030), while the EMEA entity maximum is approximately $3,200 USD per year (HR-POL-030-EMEA, converted from €3,000 at current exchange rates). The disparity is approximately $2,120 per year in favor of the US entity, despite the EMEA employee having a lower base stipend (€180/month vs $350/month), lower internet reimbursement (€50/month vs $80/month), and a lower on-call surcharge (€80/month vs $150/month).",
+    "required_context_nodes": [
+      {
+        "document_id": "HR-POL-030-US-TOTAL",
+        "file_path": "documents/hr/HR-POL-030_Remote_Work_US.md",
+        "critical_text_snippet": "Total Maximum Annual Stipend (US Entity): Under normal circumstances, the maximum total annual remote work benefit per employee is $5,320 ($4,200 base + $1,800 internet reimbursement, excluding the one-time equipment provision of $1,200 and the on-call surcharge of $150/month if applicable)."
+      },
+      {
+        "document_id": "HR-POL-030-EMEA-TOTAL",
+        "file_path": "documents/hr/HR-POL-030-EMEA_Remote_Work.md",
+        "critical_text_snippet": "Total Maximum Annual Stipend (EMEA Entity): Under normal circumstances, the maximum total annual remote work benefit per employee is €3,000 (€2,160 base + €600 internet + €240 on-call surcharge), which converts to approximately $3,200 USD at current exchange rates."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["$5,320", "$3,200", "$2,120", "US entity higher", "€3,000"],
+      "negative_constraints": ["EMEA is higher", "they are equal", "$5,000", "€5,320"]
+    },
+    "source_documents": ["documents/hr/HR-POL-030_Remote_Work_US.md", "documents/hr/HR-POL-030-EMEA_Remote_Work.md"],
+    "tags": ["multi-hop", "benefit-comparison", "hr", "us-vs-emea", "currency-conversion"]
+  },
+  {
+    "eval_id": "AVL-2026-L2-071",
+    "complexity_level": 2,
+    "domain": "Operations & Compliance — Breach Reporting Chain",
+    "question": "A critical regulatory breach has been discovered at the Singapore (APAC) hub involving a safety systems violation. According to corporate policy, who must be notified and within what timeframes?",
+    "ground_truth_answer": "This is a Critical breach (per SOP-COM-015 Table 1) requiring notification within 2 hours to: (1) the Regional Compliance Officer for APAC (Aisha Al-Rashid), (2) the Regional Operations Vice President for APAC (Kenji Sato), (3) the General Counsel, and (4) the relevant regulator. Additionally, per SOP OP-204, because this involves a 'regulatory breach' which is a Tier-3 classification, the Global Compliance Officer must also be notified within 4 hours. The employee who discovered it can report through the AVL Compliance Hotline (1-800-AVL-COMP), the HR Portal (Form COM-015-BREACH), or directly to Aisha Al-Rashid.",
+    "required_context_nodes": [
+      {
+        "document_id": "SOP-COM-015-BREACH-TIMELINE",
+        "file_path": "documents/compliance/SOP-COM-015_Regulatory_Breach_Report.md",
+        "critical_text_snippet": "Critical (Level 1): Potential criminal liability, >$1M in fines, or imminent safety risk — Reporting Window: 2 hours from discovery — Mandatory Notification To: Regional VP, General Counsel, relevant regulator."
+      },
+      {
+        "document_id": "SOP-COM-015-APAC-OFFICER",
+        "file_path": "documents/compliance/SOP-COM-015_Regulatory_Breach_Report.md",
+        "critical_text_snippet": "APAC (Kenji Sato's region): Aisha Al-Rashid — a.rashid@aerovelo-global.com."
+      },
+      {
+        "document_id": "RGM-2026-APAC-VP",
+        "file_path": "documents/governance/RGM-2026_Regional_Governance_Matrix.md",
+        "critical_text_snippet": "APAC Division: Kenji Sato, VP. Tokyo (NRT), Singapore (SIN), Sydney (SYD) hubs."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["2 hours", "Aisha Al-Rashid", "Kenji Sato", "General Counsel", "Critical breach"],
+      "negative_constraints": ["24 hours", "Patricia Gomez", "Marcus Vance", "72 hours"]
+    },
+    "source_documents": ["documents/compliance/SOP-COM-015_Regulatory_Breach_Report.md", "documents/governance/RGM-2026_Regional_Governance_Matrix.md"],
+    "tags": ["multi-hop", "breach-reporting", "apac", "safety", "critical-incident"]
+  },
+  {
+    "eval_id": "AVL-2026-L2-089",
+    "complexity_level": 2,
+    "domain": "Finance & Operations — Budget Variance Across Regions",
+    "question": "The Frankfurt hub's regional Operations Director requests a 14% budget variance for the EMEA division this quarter. Is this within tolerance, and who must approve it?",
+    "ground_truth_answer": "No, a 14% budget variance exceeds the EMEA division's tolerance. According to FIN-AUTH-101 Section 3.1, the EMEA division (Marcus Vance's region) has a variance tolerance of ±10% before CFO review is required. A 14% variance would trigger mandatory CFO review. Additionally, because the EMEA Regional Operations Director has a maximum per-transaction limit of $25,000, any single variance exceeding that amount would require Regional VP (Marcus Vance) approval per the authorization matrix.",
+    "required_context_nodes": [
+      {
+        "document_id": "FIN-AUTH-101-VARIANCE",
+        "file_path": "documents/finance/FIN-AUTH-101_Authorization_Framework.md",
+        "critical_text_snippet": "EMEA Division (Marcus Vance): ±10% variance before CFO review required. Regional Operations Director: $25,000 max per transaction, $100,000 max per month."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["10%", "CFO review", "exceeds tolerance", "Marcus Vance"],
+      "negative_constraints": ["within tolerance", "automatic approval", "Regional Director can approve 14%"]
+    },
+    "source_documents": ["documents/finance/FIN-AUTH-101_Authorization_Framework.md"],
+    "tags": ["multi-hop", "budget-variance", "finance", "EMEA", "authorization"]
+  }
+]

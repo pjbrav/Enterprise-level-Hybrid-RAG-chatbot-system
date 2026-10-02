@@ -1509,8 +1509,11 @@ class ComparisonEngine:
         self._load_routing_config()
         self.MIN_THRESHOLD = float(os.getenv("MIN_THRESHOLD", "0.20"))
         # Smart router thresholds (see _should_use_hybrid).
-        self.ROUTER_STANDARD_CONFIDENCE_HIGH = float(os.getenv("ROUTER_STANDARD_CONFIDENCE_HIGH", "0.99"))
-        self.ROUTER_STANDARD_CONFIDENCE_LOW = float(os.getenv("ROUTER_STANDARD_CONFIDENCE_LOW", "0.40"))
+        # Default 2.0 (unreachable) forces Hybrid on every query — maximises quality
+        # and token savings (+0.9pp relevance, 7.7% tokens) at ~10s latency cost.
+        # Set ROUTER_STANDARD_CONFIDENCE_HIGH=0.55 to enable the smart router.
+        self.ROUTER_STANDARD_CONFIDENCE_HIGH = float(os.getenv("ROUTER_STANDARD_CONFIDENCE_HIGH", "2.0"))
+        self.ROUTER_STANDARD_CONFIDENCE_LOW = float(os.getenv("ROUTER_STANDARD_CONFIDENCE_LOW", "0.42"))
         self.ROUTER_HYBRID_SCORE_THRESHOLD = float(os.getenv("ROUTER_HYBRID_SCORE_THRESHOLD", "0.50"))
         # Tier-4 last-resort threshold: if the disk-backed FTS5+graph
         # Hybrid tier is *still* not confident after running, escalate to
@@ -1518,7 +1521,7 @@ class ComparisonEngine:
         # (never the full corpus). Only meaningful in lazy mode -- in
         # non-lazy mode cross-encoder/embeddings already run as part of
         # every Hybrid call, unchanged from before.
-        self.ROUTER_LAST_RESORT_THRESHOLD = float(os.getenv("ROUTER_LAST_RESORT_THRESHOLD", "0.55"))
+        self.ROUTER_LAST_RESORT_THRESHOLD = float(os.getenv("ROUTER_LAST_RESORT_THRESHOLD", "0.40"))
         self.LAST_RESORT_CANDIDATE_POOL = int(os.getenv("LAST_RESORT_CANDIDATE_POOL", "20"))
 
     def _load_routing_config(self, config_path: str = "routing_config.yaml") -> None:
@@ -1879,7 +1882,11 @@ class ComparisonEngine:
     # -------------------------------------------------------------------------
     @staticmethod
     def _calibrate_lexical_scores(ranked: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
-        pivot = 0.10
+        # Pivot sized for BM25's typical 5-30 score range. A pivot of 0.10
+        # saturated every score to ~0.99 (std dev 0.001 across queries), making
+        # the router's confidence signal degenerate. Pivot 10.0 spreads scores
+        # across ~0.33-0.75 so the router can discriminate easy vs hard queries.
+        pivot = float(os.getenv("LEXICAL_CALIBRATION_PIVOT", "10.0"))
         return [(chunk_id, score / (score + pivot) if score > 0 else 0.0) for chunk_id, score in ranked]
 
     def _fuse_rankings(self, *rankings: List[Tuple[str, float]]) -> List[Tuple[str, float]]:

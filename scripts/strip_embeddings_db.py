@@ -19,8 +19,8 @@ import shutil
 import sqlite3
 import time
 
-SOURCE = "hybrid_rag_v22.db"
-STRIPPED = "hybrid_rag_v22_stripped.db"
+SOURCE = "data/hybrid_rag_v22.db"
+STRIPPED = "data/hybrid_rag_v22_stripped.db"
 
 
 def size_gb(path: str) -> float:

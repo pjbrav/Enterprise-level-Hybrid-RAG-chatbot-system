@@ -19,11 +19,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m spacy download en_core_web_sm
 
 # Copy application code
-COPY v24.py batch_compare_v2.py routing_config.yaml app.py /app/
+COPY v24.py app.py /app/
+COPY rag/ /app/rag/
+COPY scripts/ /app/scripts/
 
 # Copy the pre-ingested database (downloaded by CI from GitHub Releases)
-COPY hybrid_rag_v22.db /app/hybrid_rag_v22.db
-COPY questionaskerbigset.parquet /app/questionaskerbigset.parquet
+COPY data/hybrid_rag_v22.db /app/data/hybrid_rag_v22.db
+COPY data/questionaskerbigset.parquet /app/data/questionaskerbigset.parquet
 
 EXPOSE 7860
 

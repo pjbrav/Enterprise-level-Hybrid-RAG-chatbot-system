@@ -5,6 +5,8 @@ The database lives server-side — users never download anything.
 """
 
 import os
+import sys
+from pathlib import Path
 import gradio as gr
 from v24 import build_large_corpus_engine
 
@@ -94,9 +96,9 @@ def run_eval(num_questions: int, api_key: str):
     try:
         import subprocess
         result = subprocess.run(
-            ["python", "batch_compare_v2.py", "--force-hybrid",
+            [sys.executable, str(Path(__file__).parent / "scripts" / "batch_compare_v2.py"), "--force-hybrid",
              "--sample", str(int(num_questions)), "--output", "web_eval"],
-            capture_output=True, text=True, timeout=600, cwd="/app"
+            capture_output=True, text=True, timeout=600, cwd=str(Path(__file__).parent)
         )
         return result.stdout if result.returncode == 0 else result.stderr
     except subprocess.TimeoutExpired:

@@ -17,16 +17,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root, so `import v24` works from scripts/
+
 
 def parse_args():
     p = argparse.ArgumentParser(
         description="Standard vs Hybrid RAG batch comparison",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--db", default=os.getenv("SQLITE_DATABASE_PATH", "hybrid_rag_v22.db"),
-                   help="Path to SQLite database (default: hybrid_rag_v22.db or SQLITE_DATABASE_PATH env)")
-    p.add_argument("--questions", default="questionaskerbigset.parquet",
-                   help="Path to questions parquet file (default: questionaskerbigset.parquet)")
+    p.add_argument("--db", default=os.getenv("SQLITE_DATABASE_PATH", "data/hybrid_rag_v22.db"),
+                   help="Path to SQLite database (default: data/hybrid_rag_v22.db or SQLITE_DATABASE_PATH env)")
+    p.add_argument("--questions", default="data/questionaskerbigset.parquet",
+                   help="Path to questions parquet file (default: data/questionaskerbigset.parquet)")
     p.add_argument("--sample", type=int, default=200,
                    help="Number of questions to sample (default: 200, 0=all)")
     p.add_argument("--provider", default="openai",

@@ -5,19 +5,20 @@ Install in development mode:
     pip install -e .
 
 Then import from any project:
-    from v23 import build_large_corpus_engine
+    from v24 import build_large_corpus_engine
 """
 
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
     name="hybrid-rag",
-    version="2.3.0",
+    version="2.4.0",
     description="Hybrid RAG with TF-IDF + Entity Graph + RRF + Cross-Encoder reranking",
-    long_description=open("README.md").read() if __import__("os").path.exists("README.md") else "",
+    long_description=open("README.md", encoding="utf-8").read() if __import__("os").path.exists("README.md") else "",
     long_description_content_type="text/markdown",
     python_requires=">=3.10",
-    py_modules=["v23"],  # v23.py is a single-module package
+    packages=["rag"],
+    py_modules=["v24"],  # compatibility shim re-exporting rag.*
     install_requires=[
         "numpy>=1.24",
         "pandas>=2.0",
@@ -34,11 +35,6 @@ setup(
             "sentence-transformers>=2.2",
             "PyYAML>=6.0",
             "openai>=1.0",
-        ],
-    },
-    entry_points={
-        "console_scripts": [
-            "hybrid-rag-eval=batch_compare_v2:main",
         ],
     },
 )

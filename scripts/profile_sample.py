@@ -7,17 +7,18 @@ including which provider actually answered it, so provider fallback
 chains are visible rather than hidden inside a single latency number.
 
 Usage:
-    python profile_sample.py hybrid_rag_v22.db questionaskerbigset.parquet
-    python profile_sample.py hybrid_rag_v22.db questionaskerbigset.parquet --n 5 --provider openai
-    python profile_sample.py hybrid_rag_v22.db questionaskerbigset.parquet --seed 7   # reproducible sample instead of random
+    python scripts/profile_sample.py data/hybrid_rag_v22.db data/questionaskerbigset.parquet
+    python scripts/profile_sample.py data/hybrid_rag_v22.db data/questionaskerbigset.parquet --n 5 --provider openai
+    python scripts/profile_sample.py data/hybrid_rag_v22.db data/questionaskerbigset.parquet --seed 7   # reproducible sample instead of random
 """
 import argparse
 import random
 import sys
 import time
 
-sys.path.insert(0, ".")
-import v23
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import v24 as v23
 
 
 def timed(label, fn, *args, **kwargs):

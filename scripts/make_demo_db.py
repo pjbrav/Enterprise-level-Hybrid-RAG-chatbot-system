@@ -18,8 +18,8 @@ import shutil
 import sqlite3
 import time
 
-SOURCE = "hybrid_rag_v22.db"
-DEMO = "hybrid_rag_demo.db"
+SOURCE = "data/hybrid_rag_v22.db"
+DEMO = "data/hybrid_rag_demo.db"
 
 # Partitions to keep in the demo. Edit after seeing the printed list below.
 KEEP = ["partition_github", "partition_jira", "partition_slack"]

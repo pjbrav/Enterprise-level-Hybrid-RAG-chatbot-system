@@ -67,25 +67,30 @@ export OPENAI_API_KEY=sk-your-key-here
 python -c "from v24 import build_large_corpus_engine; db,p,e = build_large_corpus_engine(); print(e.compare('What GitHub PRs relate to Jira tickets?'))"
 
 # Run evaluation
-python batch_compare_v2.py --force-hybrid --sample 50
+python scripts/batch_compare_v2.py --force-hybrid --sample 50
 
 # Run tests
-python test_v24.py
+python -m pytest tests -q
 ```
 
 ## Configuration
 
-All thresholds are environment-variable configurable (see `.env.example`).
-Per-deployment routing keywords go in `routing_config.yaml`.
+All thresholds are environment-variable configurable (see `env.example`).
+Per-deployment routing keywords go in `routing_config.yaml` (copy `routing_config.example.yaml`).
 
 ## Files
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `v24.py` | Main RAG system (FTS5 + entity graph + RRF + cross-encoder + smart router) |
-| `batch_compare_v2.py` | Evaluation script (CLI args, file picker, CSV/MD output) |
-| `test_v24.py` | Unit tests |
-| `routing_config.yaml` | Per-deployment partition routing keywords |
+| `rag/` | The engine package (config, text, db, ingest, rankers, providers, engine, cli) |
+| `v24.py` | Compatibility shim re-exporting `rag.*` (`from v24 import ...` still works) |
+| `app.py` | Gradio web UI |
+| `scripts/` | Evaluation harness (`batch_compare_v2.py`) and DB maintenance scripts |
+| `tests/` | Unit tests |
+| `samples/` | Small fixture documents and evaluation question sets |
+| `eval_results/` | Curated evaluation outputs |
+| `docs/` | Implementation plan and notes |
+| `routing_config.example.yaml` | Example per-deployment partition routing keywords |
 | `requirements.txt` | Python dependencies |
 | `setup.py` | Package installation |
 
@@ -115,13 +120,13 @@ python -m spacy download en_core_web_sm
 $env:OPENAI_API_KEY="sk-your-key-here"
 
 # 6. Run tests to verify everything works
-python test_v24.py
+python -m pytest tests -q
 
 # 7. Run a single query
 python -c "from v24 import build_large_corpus_engine; db,p,e = build_large_corpus_engine(); print(e.compare('What GitHub PRs relate to Jira tickets?'))"
 
 # 8. Run the full 500-question evaluation
-python batch_compare_v2.py --force-hybrid --sample 500 --output final_results
+python scripts/batch_compare_v2.py --force-hybrid --sample 500 --output final_results
 ```
 
 ### Option B: Create the repo from scratch and push to GitHub

@@ -22,6 +22,9 @@ DATABASE_PATH = os.getenv("SQLITE_DATABASE_PATH", "data/hybrid_rag_v22.db")
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATA_DIR = Path(os.getenv("DATA_DIR", "data"))
+CORPORA_DIR = DATA_DIR / "corpora"          # one SQLite file per corpus (SQLite backend)
+STATE_DB_PATH = Path(os.getenv("STATE_DB_PATH", str(DATA_DIR / "state.db")))  # corpora registry, OTPs, joins
 
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))

@@ -1202,7 +1202,8 @@ def export_markdown(query: str, results: Dict[str, Dict[str, Any]]) -> Path:
     return output_path
 
 
-def build_large_corpus_engine(db_path: str = DATABASE_PATH, database_url: str = None, provider: str = "auto", api_key: Optional[str] = None) -> Tuple[DatabaseManager, DocumentProcessor, "ComparisonEngine"]:
+def build_large_corpus_engine(db_path: str = DATABASE_PATH, database_url: str = None, provider: str = "auto", api_key: Optional[str] = None,
+                              schema: Optional[str] = None, read_only: bool = False) -> Tuple[DatabaseManager, DocumentProcessor, "ComparisonEngine"]:
     """Construct db/processor/engine in large-corpus (memory-bounded) mode:
     DocumentProcessor never loads the full corpus into RAM, and
     ComparisonEngine retrieves via disk-backed FTS5/entity-table queries
@@ -1212,7 +1213,7 @@ def build_large_corpus_engine(db_path: str = DATABASE_PATH, database_url: str = 
     default) for small corpora where the original in-RAM path is fine
     and slightly faster.
     """
-    db = DatabaseManager(db_path=db_path, database_url=database_url)
+    db = DatabaseManager(db_path=db_path, database_url=database_url, schema=schema, read_only=read_only)
     processor = DocumentProcessor(db, lazy=True)
     engine = ComparisonEngine(processor, db, provider=provider, api_key=api_key)
     return db, processor, engine

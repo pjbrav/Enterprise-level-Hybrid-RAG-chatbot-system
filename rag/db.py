@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,9 +16,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    from psycopg2.pool import ThreadedConnectionPool
 except ImportError:
     psycopg2 = None
     RealDictCursor = None
+    ThreadedConnectionPool = None
 
 from rag.config import DATABASE_PATH, PGVECTOR_DIMENSIONS, PROVIDER_PRICING_DEFAULTS, is_running_in_docker
 from rag.text import clean_text, extract_entities
@@ -34,10 +39,35 @@ class ChunkMetadata:
     entity_count: int
 
 
+_PG_POOLS: Dict[str, Any] = {}
+_PG_POOLS_LOCK = threading.Lock()
+_SCHEMA_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def _get_pg_pool(database_url: str) -> Any:
+    """One shared connection pool per Postgres URL (all corpora/schemas on
+    that server share it; each checkout selects its own schema)."""
+    with _PG_POOLS_LOCK:
+        pool = _PG_POOLS.get(database_url)
+        if pool is None:
+            pool = ThreadedConnectionPool(1, int(os.getenv("PG_POOL_MAX", "10")), dsn=database_url)
+            _PG_POOLS[database_url] = pool
+        return pool
+
+
 class DatabaseManager:
+    """SQLite or PostgreSQL storage for one corpus.
+
+    schema:    Postgres only -- every corpus lives in its own schema, so
+               isolation and deletion need no per-table corpus_id column.
+    read_only: SQLite only -- attach an existing database (e.g. the 16 GB
+               evaluation DB) without ever writing to it or creating tables.
+    """
+
     CREDIT_PROVIDERS = ("claude", "openai", "gemini")
 
-    def __init__(self, db_path: str = DATABASE_PATH, database_url: str = None):
+    def __init__(self, db_path: str = DATABASE_PATH, database_url: str = None,
+                 schema: Optional[str] = None, read_only: bool = False):
         self.db_path = db_path
         if database_url is None:
             database_url = os.getenv("DATABASE_URL")
@@ -46,53 +76,84 @@ class DatabaseManager:
         self.database_url = (database_url or "").strip()
         self.use_postgres = bool(self.database_url)
         self.pgvector_enabled = False
+        self.read_only = read_only
+        self.schema = schema
+        if schema is not None and not _SCHEMA_RE.match(schema):
+            raise ValueError(f"Invalid schema name: {schema!r}")
         if self.use_postgres and psycopg2 is None:
             raise RuntimeError("DATABASE_URL is set but psycopg2-binary is not installed.")
+        if self.use_postgres and read_only:
+            raise ValueError("read_only attach is only supported for SQLite corpora.")
         self._init_db()
 
     @property
     def backend_name(self) -> str:
         return "PostgreSQL + pgvector" if self.use_postgres else "SQLite"
 
-    def _connect(self) -> Any:
-        if self.use_postgres:
-            return psycopg2.connect(self.database_url)
-        conn = sqlite3.connect(self.db_path)
+    def _open_sqlite(self) -> sqlite3.Connection:
+        if self.read_only:
+            uri = Path(self.db_path).resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+        else:
+            conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _query(self, query: str, params: Sequence[Any] = (), fetch: bool = False) -> List[Dict[str, Any]]:
-        conn = self._connect(); conn.execute("PRAGMA journal_mode=WAL")
+    @contextlib.contextmanager
+    def _conn(self):
+        """Yield a connection. SQLite: opened and closed per call (cheap and
+        thread-safe). Postgres: checked out of the shared pool with this
+        corpus's schema selected, then returned."""
+        if not self.use_postgres:
+            conn = self._open_sqlite()
+            try:
+                yield conn
+            finally:
+                conn.close()
+            return
+        pool = _get_pg_pool(self.database_url)
+        conn = pool.getconn()
         try:
+            if self.schema:
+                with conn.cursor() as cur:
+                    cur.execute(f'SET search_path TO "{self.schema}", public')
+            yield conn
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            pool.putconn(conn, close=bool(conn.closed))
+
+    def _query(self, query: str, params: Sequence[Any] = (), fetch: bool = False) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor) if self.use_postgres else conn.cursor()
             cursor.execute(query.replace("?", "%s") if self.use_postgres else query, tuple(params))
             rows = [dict(row) for row in cursor.fetchall()] if fetch else []
             conn.commit()
             return rows
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def _many(self, query: str, records: Sequence[Sequence[Any]]) -> None:
         if not records:
             return
-        conn = self._connect(); conn.execute("PRAGMA journal_mode=WAL")
-        try:
+        with self._conn() as conn:
             cursor = conn.cursor()
             cursor.executemany(query.replace("?", "%s") if self.use_postgres else query, records)
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     def _init_db(self) -> None:
+        if self.read_only:
+            return  # attached database: never create tables or change settings
         if self.use_postgres:
+            if self.schema:
+                self._query(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"')
             try:
-                self._query("CREATE EXTENSION IF NOT EXISTS vector")
+                # Always in `public`: created while a corpus schema leads the
+                # search_path it would land inside that one corpus, break every
+                # other corpus' VECTOR column, and vanish when it is dropped.
+                self._query("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
                 self.pgvector_enabled = True
             except Exception as exc:
                 print(f"pgvector unavailable; storing embeddings as JSON: {exc}")
@@ -129,7 +190,14 @@ class DatabaseManager:
             self._query("CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity ON chunk_entities(entity)")
             self._query("CREATE INDEX IF NOT EXISTS idx_chunk_entities_partition ON chunk_entities(partition_id)")
             self._query("""CREATE TABLE IF NOT EXISTS entity_frequency (entity TEXT PRIMARY KEY, freq INTEGER NOT NULL)""")
+            # Per-lexeme document frequency (the Postgres counterpart of the
+            # fts5vocab view), refreshed by rebuild_term_df() after ingest.
+            self._query("""CREATE TABLE IF NOT EXISTS term_df (term TEXT PRIMARY KEY, df INTEGER NOT NULL)""")
         else:
+            # WAL is a persistent property of the database file, so it is set
+            # once here rather than on every connection.
+            with self._conn() as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
             self._query("""CREATE TABLE IF NOT EXISTS documents (file_path TEXT PRIMARY KEY, file_name TEXT NOT NULL, partition_id TEXT NOT NULL, processed_date TEXT NOT NULL, chunk_count INTEGER NOT NULL, content_hash TEXT)""")
             self._query("""CREATE TABLE IF NOT EXISTS chunks (chunk_id TEXT PRIMARY KEY, file_path TEXT NOT NULL, partition_id TEXT NOT NULL, chunk_text TEXT NOT NULL, token_count INTEGER NOT NULL, entity_count INTEGER NOT NULL, chunk_index INTEGER NOT NULL, embedding TEXT)""")
             self._query("""CREATE TABLE IF NOT EXISTS comparisons (id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL, timestamp TEXT NOT NULL, method TEXT NOT NULL, latency REAL NOT NULL, tokens_used INTEGER NOT NULL, chunks_retrieved INTEGER NOT NULL, relevance_score REAL NOT NULL, confidence_score REAL NOT NULL, answer TEXT NOT NULL)""")
@@ -181,14 +249,13 @@ class DatabaseManager:
             # entity_search/get_partition_ids_for_entities to cheaply filter
             # out high-fanout entities before the expensive aggregation --
             # see _filter_high_fanout_entities. Small table (one row per
-            # unique entity, not per chunk_entities row), populated by
-            # backfill_entity_frequency.py.
+            # unique entity, not per chunk_entities row), refreshed by
+            # rebuild_entity_frequency() after every ingest.
             self._query("""CREATE TABLE IF NOT EXISTS entity_frequency (entity TEXT PRIMARY KEY, freq INTEGER NOT NULL)""")
-
 
     def _ensure_legacy_columns(self, vector_type: str) -> None:
         if self.use_postgres:
-            rows = self._query("SELECT column_name FROM information_schema.columns WHERE table_name = ?", ("chunks",), fetch=True)
+            rows = self._query("SELECT column_name FROM information_schema.columns WHERE table_name = ? AND table_schema = current_schema()", ("chunks",), fetch=True)
             columns = {row["column_name"] for row in rows}
             if "embedding" not in columns:
                 self._query(f"ALTER TABLE chunks ADD COLUMN embedding {vector_type}")
@@ -215,11 +282,20 @@ class DatabaseManager:
         return {row["content_hash"]: row["file_path"] for row in rows}
 
     def save_document(self, file_path: str, partition_id: str, chunks: Dict[str, str], metadata: Dict[str, ChunkMetadata], content_hash: str = "") -> None:
+        if self.read_only:
+            raise PermissionError("This corpus is attached read-only; ingestion is disabled.")
         canonical_path = str(Path(file_path).resolve())
-        conn = self._connect(); conn.execute("PRAGMA journal_mode=WAL")
-        try:
+        with self._conn() as conn:
             cursor = conn.cursor()
             marker = "%s" if self.use_postgres else "?"
+            # Re-ingesting a file: also drop the old chunks' FTS / entity rows,
+            # otherwise a file that now yields fewer chunks leaves stale hits.
+            cursor.execute(f"SELECT chunk_id FROM chunks WHERE file_path = {marker}", (canonical_path,))
+            old_ids = [row[0] for row in cursor.fetchall()]
+            if old_ids:
+                if not self.use_postgres:
+                    cursor.executemany("DELETE FROM chunks_fts WHERE chunk_id = ?", [(cid,) for cid in old_ids])
+                cursor.executemany(f"DELETE FROM chunk_entities WHERE chunk_id = {marker}", [(cid,) for cid in old_ids])
             cursor.execute(f"DELETE FROM chunks WHERE file_path = {marker}", (canonical_path,))
             if self.use_postgres:
                 cursor.execute("""INSERT INTO documents (file_path, file_name, partition_id, processed_date, chunk_count, content_hash) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (file_path) DO UPDATE SET file_name=EXCLUDED.file_name, partition_id=EXCLUDED.partition_id, processed_date=EXCLUDED.processed_date, chunk_count=EXCLUDED.chunk_count, content_hash=EXCLUDED.content_hash""", (canonical_path, Path(canonical_path).name, partition_id, datetime.now().isoformat(timespec="seconds"), len(chunks), content_hash))
@@ -260,11 +336,6 @@ class DatabaseManager:
                 cursor.executemany(ins_stmt, entity_rows)
 
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
     # -------------------------------------------------------------------------
     # Disk-backed search (used by ComparisonEngine in "lazy" / large-corpus
@@ -287,12 +358,22 @@ class DatabaseManager:
         if len(clean_terms) <= self.MAX_FTS_QUERY_TERMS:
             return clean_terms
         try:
-            placeholders = ",".join("?" for _ in clean_terms)
-            rows = self._query(
-                f"SELECT term, doc FROM chunks_fts_vocab WHERE term IN ({placeholders})",
-                clean_terms, fetch=True,
-            )
-            freq_map = {row["term"]: row["doc"] for row in rows}
+            if self.use_postgres:
+                # term_df is keyed by stemmed lexeme; map each raw term to its
+                # lexeme with the same english_stem dictionary the index used.
+                rows = self._query(
+                    "SELECT x.t AS term, d.df AS doc FROM unnest(%s::text[]) AS x(t) "
+                    "LEFT JOIN term_df d ON d.term = (ts_lexize('english_stem', x.t))[1]",
+                    (list(clean_terms),), fetch=True,
+                )
+                freq_map = {row["term"]: (row["doc"] or 0) for row in rows}
+            else:
+                placeholders = ",".join("?" for _ in clean_terms)
+                rows = self._query(
+                    f"SELECT term, doc FROM chunks_fts_vocab WHERE term IN ({placeholders})",
+                    clean_terms, fetch=True,
+                )
+                freq_map = {row["term"]: row["doc"] for row in rows}
             # Terms not found in the vocab (rare/misspelled/not yet indexed)
             # are treated as maximally rare -- freq 0 -- so they're kept.
             ranked_terms = sorted(clean_terms, key=lambda t: freq_map.get(t, 0))
@@ -300,6 +381,21 @@ class DatabaseManager:
             return (kept or ranked_terms)[: self.MAX_FTS_QUERY_TERMS]
         except Exception:
             return clean_terms  # chunks_fts_vocab unavailable -- unfiltered behavior
+
+    @staticmethod
+    def _pg_tsquery(terms: Sequence[str]) -> str:
+        """OR-joined to_tsquery string. plainto_tsquery would AND the terms
+        (it ignores the pipe character), which is not the 'any query term'
+        behaviour of the SQLite FTS5 path. Terms are reduced to [a-z0-9]
+        pieces so no tsquery syntax can be injected; pieces of 4+ chars get a
+        prefix match because query_terms() applies a crude suffix-stripper
+        that can leave non-words ('statu', 'frag') the english stemmer would
+        not match."""
+        parts: List[str] = []
+        for term in terms:
+            for piece in re.findall(r"[A-Za-z0-9]+", term):
+                parts.append(piece.lower() + (":*" if len(piece) >= 4 else ""))
+        return " | ".join(dict.fromkeys(parts))
 
     def fts_search(self, terms: Sequence[str], partition_id: Optional[str] = None, limit: int = 50) -> List[Tuple[str, float]]:
         """Lexical search that never loads the corpus into Python -- the
@@ -311,11 +407,12 @@ class DatabaseManager:
         clean_terms = [t.replace('"', ' ').strip() for t in terms if t and t.strip()]
         if not clean_terms:
             return []
-        if not self.use_postgres:
-            clean_terms = self._cap_fts_terms(clean_terms)
+        clean_terms = self._cap_fts_terms(clean_terms)
         if self.use_postgres:
-            tsquery = " | ".join(clean_terms)  # OR semantics, matches vector_rank's "any query term" behaviour
-            sql = "SELECT chunk_id, ts_rank_cd(chunk_text_tsv, query) AS score FROM chunks, plainto_tsquery('english', %s) query WHERE chunk_text_tsv @@ query"
+            tsquery = self._pg_tsquery(clean_terms)
+            if not tsquery:
+                return []
+            sql = "SELECT chunk_id, ts_rank_cd(chunk_text_tsv, query) AS score FROM chunks, to_tsquery('english', %s) query WHERE chunk_text_tsv @@ query"
             params: List[Any] = [tsquery]
             if partition_id:
                 sql += " AND partition_id = %s"
@@ -338,12 +435,43 @@ class DatabaseManager:
             # rest of the ranking pipeline (RRF fusion, calibration, etc).
             return [(row["chunk_id"], -float(row["score"])) for row in rows]
 
+    # -------------------------------------------------------------------------
+    # Post-ingest statistics (used to cap high-fanout terms/entities at query time)
+    # -------------------------------------------------------------------------
+    def rebuild_entity_frequency(self) -> int:
+        """Recompute entity_frequency from chunk_entities (one GROUP BY).
+        Replaces the old standalone backfill script; run after every ingest."""
+        if self.read_only:
+            return 0
+        self._query("DELETE FROM entity_frequency")
+        self._query("INSERT INTO entity_frequency (entity, freq) SELECT entity, COUNT(*) FROM chunk_entities GROUP BY entity")
+        return int(self._query("SELECT COUNT(*) AS n FROM entity_frequency", fetch=True)[0]["n"])
+
+    def rebuild_term_df(self) -> int:
+        """Postgres only: refresh term_df from the tsvector index (ts_stat).
+        SQLite reads the live fts5vocab view, so there is nothing to rebuild."""
+        if not self.use_postgres or self.read_only:
+            return 0
+        self._query("DELETE FROM term_df")
+        self._query("INSERT INTO term_df (term, df) SELECT word, ndoc FROM ts_stat('SELECT chunk_text_tsv FROM chunks')")
+        return int(self._query("SELECT COUNT(*) AS n FROM term_df", fetch=True)[0]["n"])
+
+    def finalize_ingest(self) -> None:
+        """Refresh every derived statistic after documents were added."""
+        self.rebuild_entity_frequency()
+        self.rebuild_term_df()
+
+    def drop_schema(self) -> None:
+        """Postgres only: delete this corpus entirely."""
+        if self.use_postgres and self.schema:
+            self._query(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
+
     MAX_ENTITY_FANOUT = int(os.getenv("MAX_ENTITY_FANOUT", "5000"))
 
     def _filter_high_fanout_entities(self, entities_lower: List[str]) -> List[str]:
         """Drop entities matching more than MAX_ENTITY_FANOUT chunks
         corpus-wide, via a cheap lookup against the small precomputed
-        entity_frequency table (see backfill_entity_frequency.py). Falls
+        entity_frequency table (see rebuild_entity_frequency()). Falls
         through to the original list, unfiltered, if that table doesn't
         exist yet or if every given entity happens to be high-frequency
         (searching something over searching nothing).
@@ -366,7 +494,7 @@ class DatabaseManager:
         also contains, via a single indexed SQL query.
 
         Entities are first filtered against entity_frequency (a small,
-        precomputed table -- see backfill_entity_frequency.py) to drop
+        precomputed table -- see rebuild_entity_frequency()) to drop
         anything matching more than MAX_ENTITY_FANOUT chunks corpus-wide.
         This is the general form of the "api"/"what"/"2026" problem found
         via profiling: a handful of specific words are now excluded at
@@ -460,7 +588,7 @@ class DatabaseManager:
         return {row["partition_id"]: int(row["n"]) for row in rows}
 
     def save_embeddings(self, embeddings: Dict[str, Any]) -> None:
-        if not embeddings:
+        if not embeddings or self.read_only:
             return
         records = []
         for chunk_id, vector in embeddings.items():
@@ -472,6 +600,8 @@ class DatabaseManager:
             self._many("UPDATE chunks SET embedding = ? WHERE chunk_id = ?", records)
 
     def save_comparison(self, query: str, results: Dict[str, Dict[str, Any]]) -> None:
+        if self.read_only:
+            return
         records = [(query, datetime.now().isoformat(timespec="seconds"), method, float(data.get("latency", 0)), int(data.get("tokens_used", 0)), int(data.get("chunks_retrieved", 0)), float(data.get("relevance_score", 0)), float(data.get("confidence_score", 0)), str(data.get("answer", ""))) for method, data in results.items()]
         self._many("INSERT INTO comparisons (query, timestamp, method, latency, tokens_used, chunks_retrieved, relevance_score, confidence_score, answer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", records)
 
@@ -484,7 +614,7 @@ class DatabaseManager:
         usd_raw, token_raw = os.getenv(f"{prefix}_CREDITS_USD"), os.getenv(f"{prefix}_CREDITS_TOKENS")
         configured_in_env = usd_raw not in (None, "") or token_raw not in (None, "")
         account_rows = self._query("SELECT initial_usd, initial_tokens FROM credit_accounts WHERE provider = ?", (provider,), fetch=True)
-        if not account_rows and configured_in_env:
+        if not account_rows and configured_in_env and not self.read_only:
             self._query("INSERT INTO credit_accounts (provider, initial_usd, initial_tokens, created_at) VALUES (?, ?, ?, ?)", (provider, float(usd_raw or 0.0), int(token_raw or 0), datetime.now().isoformat(timespec="seconds")))
             account_rows = self._query("SELECT initial_usd, initial_tokens FROM credit_accounts WHERE provider = ?", (provider,), fetch=True)
         configured = bool(account_rows)
@@ -511,6 +641,8 @@ class DatabaseManager:
 
     def record_usage(self, provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
         cost = estimate_provider_cost(provider, input_tokens, output_tokens)
+        if self.read_only:
+            return cost
         self._query("INSERT INTO usage (provider, model, input_tokens, output_tokens, cost_usd, created_at) VALUES (?, ?, ?, ?, ?, ?)", (provider, model, input_tokens, output_tokens, cost, datetime.now().isoformat(timespec="seconds")))
         return cost
 

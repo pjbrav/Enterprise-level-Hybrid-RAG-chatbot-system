@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import math
 import re
 from collections import Counter, defaultdict
@@ -105,6 +106,20 @@ class EntityKnowledgeGraph:
 # ---------------------------------------------------------------------------
 # Embedding-based semantic ranker (optional)
 # ---------------------------------------------------------------------------
+# The SentenceTransformer / CrossEncoder weights are ~100-400 MB and take
+# seconds to load. With one engine per corpus they are loaded once per
+# process and shared (inference only reads them).
+_MODEL_LOCK = threading.Lock()
+_SHARED_MODELS: Dict[str, Any] = {}
+
+
+def _shared_model(key: str, loader) -> Any:
+    with _MODEL_LOCK:
+        if key not in _SHARED_MODELS:
+            _SHARED_MODELS[key] = loader()
+        return _SHARED_MODELS[key]
+
+
 class EmbeddingRanker:
     def __init__(self, db: Optional[DatabaseManager] = None):
         self.model = None
@@ -112,8 +127,11 @@ class EmbeddingRanker:
         self.chunk_embeddings: Dict[str, Any] = {}
         if _EMBEDDING_AVAILABLE:
             try:
-                self.model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-                print(f"✅ Loaded embedding model: {EMBEDDING_MODEL_NAME}")
+                def _load():
+                    model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+                    print(f"✅ Loaded embedding model: {EMBEDDING_MODEL_NAME}")
+                    return model
+                self.model = _shared_model("embedding", _load)
             except Exception as e:
                 print(f"⚠️ Failed to load embedding model: {e}")
                 self.model = None
@@ -185,8 +203,11 @@ class CrossEncoderReranker:
         self.model = None
         if _CROSS_ENCODER_AVAILABLE:
             try:
-                self.model = CrossEncoder(CROSS_ENCODER_MODEL_NAME)
-                print(f"✅ Loaded cross-encoder reranker: {CROSS_ENCODER_MODEL_NAME}")
+                def _load():
+                    model = CrossEncoder(CROSS_ENCODER_MODEL_NAME)
+                    print(f"✅ Loaded cross-encoder reranker: {CROSS_ENCODER_MODEL_NAME}")
+                    return model
+                self.model = _shared_model("cross_encoder", _load)
             except Exception as e:
                 print(f"⚠️ Failed to load cross-encoder reranker: {e}")
                 self.model = None

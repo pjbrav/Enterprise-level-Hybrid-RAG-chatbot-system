@@ -196,6 +196,12 @@ Keep it under 40 lines:
 
 ## Phase 1 — Storage: Postgres fixes, pool, per-corpus isolation
 
+> **STATUS: DONE** (branch `feature/host-join-ui`). Deviations: the control-plane store (`rag/state.py`) is always
+> SQLite (`data/state.db`), not a Postgres `rag_state` schema; pgvector is installed into `public`; engines share one
+> embedding/cross-encoder model per process; `save_document` on a read-only corpus raises `PermissionError`
+> (bookkeeping writes are silent no-ops); re-ingest now also clears stale FTS/entity rows. Postgres tests run when
+> `TEST_DATABASE_URL` is set.
+
 ### 1.1 Corrections to the Cursor plan
 - **Corpus isolation without rewriting every query.** Putting a `corpus_id` column on
   every table would mean touching every SQL statement. Use:

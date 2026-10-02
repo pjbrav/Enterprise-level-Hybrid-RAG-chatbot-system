@@ -6,7 +6,9 @@ Roadmap: `docs/IMPLEMENTATION_PLAN.md` (Phase 0 cleanup done; Phases 1-7 = host/
 
 ## Layout
 - `rag/` - the engine. `config` (env + constants) -> `text` (tokens, entities) -> `db` -> `ingest`,
-  `rankers`, `providers` -> `engine` (`ComparisonEngine`) -> `cli`.
+  `rankers`, `providers` -> `engine` (`ComparisonEngine`) -> `cli`. `state` (corpora registry, `data/state.db`)
+  and `corpora` (`CorpusManager`: create/attach/ingest/delete + engine cache) sit on top.
+- One corpus = one SQLite file (`data/corpora/<id>.db`) or one Postgres schema (`corpus_<id>`); attached DBs are read-only.
 - `v24.py` - thin compatibility shim re-exporting `rag.*`. Edit `rag/`, never `v24.py`.
 - `app.py` - Gradio UI. `scripts/` - eval harness and DB maintenance. `tests/` - unit tests.
 - `samples/` - tiny fixture docs + eval question sets. `eval_results/` - curated results the README cites.

@@ -402,6 +402,13 @@ class DocumentProcessor:
                 path, existing_hashes, force, summary, partition_map,
                 preloaded_text=preloaded_texts.get(str(path)),
             )
+        if summary.processed:
+            # entity_frequency (and Postgres term_df) must reflect the new
+            # chunks, or high-fanout filtering silently no-ops on this corpus.
+            try:
+                self.db.finalize_ingest()
+            except Exception as exc:
+                print(f"Warning: post-ingest statistics refresh failed: {exc}")
         return summary
 
     def process_documents(self, file_paths: Sequence[str], force: bool = False) -> int:

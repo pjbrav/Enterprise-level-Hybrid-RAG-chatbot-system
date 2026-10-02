@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from rag.db import ChunkMetadata
+from rag.params import HybridParams
 
 MAX_WIRE_TEXT_CHARS = 8000   # hard cap per chunk on the wire (chunks are ~220 words)
 
@@ -38,6 +39,7 @@ class RetrievalResult:
     use_hybrid: bool
     start: float = 0.0                       # perf_counter() when retrieval began (end-to-end latency)
     store: Optional[ChunkStore] = None       # set when chunks live outside this engine's db
+    params: Optional[HybridParams] = None    # Hybrid tuning this result was produced with
 
 
 # ---------------------------------------------------------------------------

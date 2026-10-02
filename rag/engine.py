@@ -6,8 +6,10 @@ import math
 import os
 import re
 import sys
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -31,6 +33,7 @@ from rag.config import CONTEXT_CHARS_PER_CHUNK, CROSS_ENCODER_RERANK_TOP_K, DATA
 from rag.text import clean_text, estimate_tokens, extract_entities, query_terms, stem_token
 from rag.db import ChunkMetadata, DatabaseManager
 from rag.ingest import DocumentProcessor
+from rag.params import DEFAULT_INTENSITY, HybridParams
 from rag.retrieval import ChunkStore, RetrievalResult, result_to_wire
 from rag.rankers import CrossEncoderReranker, EmbeddingRanker, EntityKnowledgeGraph, vector_rank
 from rag.providers import ProviderConfig, available_provider_configs
@@ -73,6 +76,10 @@ class ComparisonEngine:
         self.cross_encoder = CrossEncoderReranker()
         self.CROSS_DOMAIN_THRESHOLD_RELIEF = float(os.getenv("CROSS_DOMAIN_THRESHOLD_RELIEF", "0.12"))
         # Load per-customer routing config if available
+        self._yaml_keywords: Dict[str, List[str]] = {}    # routing_config.yaml (explicit override)
+        self._auto_keywords: Dict[str, List[str]] = {}    # generated / edited per corpus
+        self._resolved_keywords: Optional[Dict[str, List[str]]] = None
+        self._existing_partitions: Optional[Set[str]] = None
         self._load_routing_config()
         self.MIN_THRESHOLD = float(os.getenv("MIN_THRESHOLD", "0.20"))
         # Smart router thresholds (see _should_use_hybrid).
@@ -114,7 +121,8 @@ class ComparisonEngine:
                     if keywords:
                         loaded[partition_id] = [kw.lower() for kw in keywords]
                 if loaded:
-                    self.PARTITION_KEYWORDS = loaded
+                    self._yaml_keywords = loaded
+                    self._resolved_keywords = None
                     print(f"  [routing] Loaded {len(loaded)} partition keyword mappings from {config_path}")
         except Exception as e:
             print(f"  [routing] Could not load {config_path}: {e}. Using defaults.")
@@ -221,9 +229,56 @@ class ComparisonEngine:
         "partition_fireflies": ["fireflies", "meeting", "transcript", "call recording", "firefly"],
         "partition_google_drive": ["google drive", "drive", "doc ", "document", "sheet", "spreadsheet"],
     }
-    PARTITION_KEYWORDS = _DEFAULT_PARTITION_KEYWORDS  # may be overridden in __init__
+    PARTITION_KEYWORDS = _DEFAULT_PARTITION_KEYWORDS  # legacy attribute; routing uses _partition_keywords()
 
-    def _get_active_partitions(self, query: str) -> List[str]:
+    def default_params(self) -> HybridParams:
+        """The engine's own (env-configurable) Hybrid settings = slider position 0.5."""
+        return HybridParams(
+            lexical_limit=self.LEXICAL_CANDIDATE_LIMIT, max_partitions=3,
+            last_resort_threshold=self.ROUTER_LAST_RESORT_THRESHOLD,
+            last_resort_pool=self.LAST_RESORT_CANDIDATE_POOL,
+        )
+
+    def params_for_intensity(self, intensity: float = DEFAULT_INTENSITY) -> HybridParams:
+        return HybridParams.for_intensity(intensity, self.default_params())
+
+    def set_partition_keywords(self, keywords: Dict[str, List[str]]) -> None:
+        """Per-corpus routing keywords (generated after ingest, editable in the UI)."""
+        self._auto_keywords = {
+            pid: [k.lower() for k in kws if k and k.strip()]
+            for pid, kws in (keywords or {}).items() if kws
+        }
+        self._resolved_keywords = None
+
+    def _corpus_partitions(self) -> Set[str]:
+        """Partition ids this corpus actually has (empty set = unknown -> no filtering)."""
+        if self._existing_partitions is None:
+            try:
+                if self.lazy:
+                    self._existing_partitions = set(self.db.get_partition_ids())
+                else:
+                    self._existing_partitions = {m.partition_id for m in self.processor.chunks_metadata.values()}
+            except Exception:
+                self._existing_partitions = set()
+        return self._existing_partitions
+
+    def _partition_keywords(self) -> Dict[str, List[str]]:
+        """Routing keywords, lowest to highest priority: built-in enterprise defaults,
+        per-corpus generated/edited keywords, routing_config.yaml. Keywords for
+        partitions this corpus does not have are dropped: otherwise a stray 'email'
+        or 'ticket' in a question would 'activate' a Gmail/Jira partition that does
+        not exist and wrongly demand cross-domain evidence."""
+        if self._resolved_keywords is None:
+            merged = dict(self._DEFAULT_PARTITION_KEYWORDS)
+            merged.update(self._auto_keywords)
+            merged.update(self._yaml_keywords)
+            existing = self._corpus_partitions()
+            if existing:
+                merged = {pid: kws for pid, kws in merged.items() if pid in existing}
+            self._resolved_keywords = merged
+        return self._resolved_keywords
+
+    def _get_active_partitions(self, query: str, max_partitions: int = 3) -> List[str]:
         """Return partition IDs relevant to this query.
 
         Two-tier routing:
@@ -237,7 +292,7 @@ class ComparisonEngine:
 
         # --- Tier 1: keyword matching ---
         matched = []
-        for partition_id, keywords in self.PARTITION_KEYWORDS.items():
+        for partition_id, keywords in self._partition_keywords().items():
             for kw in keywords:
                 if kw in query_lower:
                     if partition_id not in matched:
@@ -245,14 +300,14 @@ class ComparisonEngine:
                     break  # one keyword match is enough for this partition
 
         if matched:
-            return matched[:3]
+            return matched[:max_partitions]
 
         # --- Tier 2: entity density fallback ---
         query_entities = extract_entities(query)
         if not query_entities:
             return []
         if self.lazy:
-            return self.db.get_partition_ids_for_entities(query_entities)[:3]
+            return self.db.get_partition_ids_for_entities(query_entities)[:max_partitions]
         partition_scores = defaultdict(int)
         for entity in query_entities:
             for chunk_id in self.entity_graph.entity_chunks.get(entity, []):
@@ -260,7 +315,7 @@ class ComparisonEngine:
                 if metadata:
                     partition_scores[metadata.partition_id] += 1
         sorted_partitions = sorted(partition_scores.items(), key=lambda x: x[1], reverse=True)
-        return [p for p, _ in sorted_partitions][:3]
+        return [p for p, _ in sorted_partitions][:max_partitions]
 
 
     def _is_cross_domain_question(self, query: str) -> bool:
@@ -473,10 +528,11 @@ class ComparisonEngine:
 
     def _rank_candidates(
         self, query: str, candidate_ids: Optional[Sequence[str]], use_hybrid: bool,
-        partition_id: Optional[str] = None,
+        partition_id: Optional[str] = None, _pre: Optional[Tuple[List[str], Set[str]]] = None,
+        _params: Optional[HybridParams] = None,
     ) -> List[Tuple[str, float]]:
         if self.lazy:
-            return self._rank_candidates_disk(query, use_hybrid, partition_id)
+            return self._rank_candidates_disk(query, use_hybrid, partition_id, _pre, _params)
         return self._rank_candidates_in_memory(query, candidate_ids, use_hybrid)
 
     def _rank_candidates_in_memory(
@@ -521,6 +577,7 @@ class ComparisonEngine:
 
     def _rank_candidates_disk(
         self, query: str, use_hybrid: bool, partition_id: Optional[str] = None,
+        _pre: Optional[Tuple[List[str], Set[str]]] = None, params: Optional[HybridParams] = None,
     ) -> List[Tuple[str, float]]:
         """Large-corpus ranking path: lexical via FTS5, graph via the
         chunk_entities SQL table -- both disk-backed, so this touches at
@@ -530,21 +587,22 @@ class ComparisonEngine:
         only to this method's own output when its confidence is low,
         never to the full corpus.
         """
-        terms = query_terms(query)
-        lexical_raw = self.db.fts_search(terms, partition_id=partition_id, limit=self.LEXICAL_CANDIDATE_LIMIT)
+        limit = params.lexical_limit if params else self.LEXICAL_CANDIDATE_LIMIT
+        terms = _pre[0] if _pre else query_terms(query)
+        lexical_raw = self.db.fts_search(terms, partition_id=partition_id, limit=limit)
         lexical = self._calibrate_lexical_scores(lexical_raw)
         if not use_hybrid:
             return lexical
         rankings = [lexical]
-        entities = extract_entities(query)
+        entities = _pre[1] if _pre else extract_entities(query)
         if entities:
-            graph = self.db.entity_search(entities, partition_id=partition_id, limit=self.LEXICAL_CANDIDATE_LIMIT)
+            graph = self.db.entity_search(entities, partition_id=partition_id, limit=limit)
             if graph:
                 rankings.append(graph)
         return self._fuse_rankings(*rankings)
 
     def _last_resort_rerank(self, query: str, ranked: List[Tuple[str, float]],
-                            store: Optional[ChunkStore] = None) -> List[Tuple[str, float]]:
+                            store: Optional[ChunkStore] = None, pool: Optional[int] = None) -> List[Tuple[str, float]]:
         """Tier 4: cross-encoder + on-demand embedding reranking, applied
         only to Hybrid's own top candidates (LAST_RESORT_CANDIDATE_POOL of
         them, never the full corpus) and only when Hybrid's own
@@ -554,7 +612,7 @@ class ComparisonEngine:
         """
         if not ranked:
             return ranked
-        top = ranked[: self.LAST_RESORT_CANDIDATE_POOL]
+        top = ranked[: (pool or self.LAST_RESORT_CANDIDATE_POOL)]
         chunk_ids = [cid for cid, _ in top]
         texts = self._get_texts_batch(chunk_ids, store) if store is not None else self.db.get_chunk_texts(chunk_ids)
         if not texts:
@@ -582,16 +640,17 @@ class ComparisonEngine:
         return fused + remainder
 
     WEAK_TOP_SCORE = 0.001
+    PARALLEL_PARTITIONS = os.getenv("PARALLEL_PARTITIONS", "1") != "0"
 
     def _get_cross_domain_rankings(
-        self, query: str, use_hybrid: bool = True
+        self, query: str, use_hybrid: bool = True, params: Optional[HybridParams] = None
     ) -> List[Tuple[str, float]]:
         if self.lazy:
-            return self._get_cross_domain_rankings_disk(query, use_hybrid)
+            return self._get_cross_domain_rankings_disk(query, use_hybrid, params)
         return self._get_cross_domain_rankings_in_memory(query, use_hybrid)
 
     def _get_cross_domain_rankings_disk(
-        self, query: str, use_hybrid: bool = True
+        self, query: str, use_hybrid: bool = True, params: Optional[HybridParams] = None
     ) -> List[Tuple[str, float]]:
         """Disk-backed equivalent of the in-memory cross-domain blend:
         rank within each active partition via a partition-filtered SQL
@@ -600,19 +659,39 @@ class ComparisonEngine:
         in-memory version, just backed by fts_search/entity_search
         instead of materialised chunk-id pools.
         """
-        active_partitions = self._get_active_partitions(query)
+        active_partitions = self._get_active_partitions(query, params.max_partitions if params else 3)
         if not active_partitions:
-            return self._rank_candidates(query, None, use_hybrid)
-        by_partition: Dict[str, List[Tuple[str, float]]] = {}
-        for partition_id in active_partitions:
-            ranking = self._rank_candidates(query, None, use_hybrid, partition_id=partition_id)
+            return self._rank_candidates(query, None, use_hybrid, _params=params)
+        # Query features are computed once (spaCy is not re-run per partition and is
+        # never called from worker threads); the per-partition work below is pure
+        # database I/O, so it runs in parallel. Results are collected in the original
+        # partition order, so the output is identical to the sequential version.
+        pre = (query_terms(query), extract_entities(query) if use_hybrid else set())
+        fallback_lock = threading.Lock()
+        fallback_box: Dict[str, List[Tuple[str, float]]] = {}
+
+        def global_fallback() -> List[Tuple[str, float]]:
+            with fallback_lock:  # computed once, however many partitions are weak
+                if "ranking" not in fallback_box:
+                    fallback_box["ranking"] = self._rank_candidates(query, None, use_hybrid, _pre=pre, _params=params)
+                return fallback_box["ranking"]
+
+        def rank_partition(partition_id: str) -> List[Tuple[str, float]]:
+            ranking = self._rank_candidates(query, None, use_hybrid, partition_id=partition_id, _pre=pre, _params=params)
             if not ranking or ranking[0][1] <= self.WEAK_TOP_SCORE:
-                fallback = self._rank_candidates(query, None, use_hybrid)  # unfiltered = global
-                ranking = self._merge_rankings_unique(ranking, fallback)
-            if ranking:
-                by_partition[partition_id] = ranking
+                ranking = self._merge_rankings_unique(ranking, global_fallback())  # unfiltered = global
+            return ranking
+
+        if self.PARALLEL_PARTITIONS and len(active_partitions) > 1:
+            with ThreadPoolExecutor(max_workers=len(active_partitions)) as pool:
+                rankings = list(pool.map(rank_partition, active_partitions))
+        else:
+            rankings = [rank_partition(p) for p in active_partitions]
+        by_partition: Dict[str, List[Tuple[str, float]]] = {
+            partition_id: ranking for partition_id, ranking in zip(active_partitions, rankings) if ranking
+        }
         if not by_partition:
-            return self._rank_candidates(query, None, use_hybrid)
+            return self._rank_candidates(query, None, use_hybrid, _params=params)
 
         seeds: List[Tuple[str, float]] = []
         selected: Set[str] = set()
@@ -876,8 +955,8 @@ class ComparisonEngine:
             return self._local_answer(query, context, method), {"provider": None, "notice": ""}
         if context:
             prompt = (
-                "You are answering a technical question using retrieved evidence "
-                "from research papers.\n\n"
+                "You are answering a question using retrieved evidence "
+                "from the documents below.\n\n"
                 f"Evidence:\n{context}\n\n"
                 f"Question: {query}\n\n"
                 "Write a clear, complete answer. Ground it in the evidence above "
@@ -885,7 +964,7 @@ class ComparisonEngine:
                 "If the evidence only partially covers the question, you may use "
                 "your own general knowledge to fill gaps or add context -- but "
                 "make it clear when you're doing so (e.g. 'more generally, ...') "
-                "rather than presenting it as coming from the cited papers."
+                "rather than presenting it as coming from the cited documents."
             )
         else:
             prompt = f"Q: {query}\nGive a concise answer and state uncertainty where relevant."
@@ -923,13 +1002,18 @@ class ComparisonEngine:
                 else:
                     if OpenAI is None:
                         raise RuntimeError("install openai")
-                    kwargs: Dict[str, Any] = {"api_key": config.api_key, "timeout": 30.0, "max_retries": 1}
+                    # Local models can take a while to load on first use.
+                    kwargs: Dict[str, Any] = {"api_key": config.api_key, "max_retries": 1,
+                                              "timeout": 120.0 if config.name == "ollama" else 30.0}
                     if config.base_url:
                         kwargs["base_url"] = config.base_url
                     client = OpenAI(**kwargs)
+                    # Ollama / other OpenAI-compatible servers understand max_tokens; the
+                    # newer max_completion_tokens is only guaranteed on OpenAI itself.
+                    token_arg = "max_tokens" if config.name in ("ollama", "compatible") else "max_completion_tokens"
                     response = client.chat.completions.create(
-                        model=config.model, max_completion_tokens=MAX_ANSWER_TOKENS,
-                        messages=[{"role": "user", "content": prompt}],
+                        model=config.model, messages=[{"role": "user", "content": prompt}],
+                        **{token_arg: MAX_ANSWER_TOKENS},
                     )
                     answer = response.choices[0].message.content or ""
                     usage = response.usage
@@ -962,15 +1046,19 @@ class ComparisonEngine:
     # case; a member that fuses remote + local candidates calls the steps
     # itself (retrieve on each side, fuse, then select/answer with a ChunkStore).
     # -------------------------------------------------------------------------
-    def retrieve(self, query: str, use_hybrid: bool) -> RetrievalResult:
-        """Step 1: ranked candidates for this engine's own corpus."""
+    def retrieve(self, query: str, use_hybrid: bool, params: Optional[HybridParams] = None) -> RetrievalResult:
+        """Step 1: ranked candidates for this engine's own corpus. `params`
+        (Hybrid only) tunes how much work Hybrid does; None = engine defaults."""
         start = time.perf_counter()
+        params = (params or self.default_params()) if use_hybrid else None
         is_cross_domain = self._is_cross_domain_question(query) if use_hybrid else False
+        if params is not None and params.max_partitions < 2:
+            is_cross_domain = False  # one partition is searched, so cross-domain evidence is impossible
         threshold = self._get_adaptive_threshold(query, is_cross_domain)
         max_chunks = self._max_chunks_for_query(query, is_cross_domain)
 
         if use_hybrid:
-            ranked = self._get_cross_domain_rankings(query, use_hybrid=True)
+            ranked = self._get_cross_domain_rankings(query, use_hybrid=True, params=params)
             # Hybrid's fused (RRF + cross-encoder) scores live on a different
             # scale than Standard's calibrated TF-IDF scores -- calibrate
             # before confidence/threshold comparisons so the two pipelines
@@ -981,13 +1069,14 @@ class ComparisonEngine:
             # Standard RAG (lexical only: TF-IDF in-memory, or FTS5 disk-backed)
             candidate_ids = None if self.lazy else list(self.processor.chunk_texts)
             ranked = self._rank_candidates(query, candidate_ids, False)
-        return RetrievalResult(ranked, is_cross_domain, threshold, max_chunks, use_hybrid, start)
+        return RetrievalResult(ranked, is_cross_domain, threshold, max_chunks, use_hybrid, start, params=params)
 
-    def select(self, query: str, result: RetrievalResult,
-               store: Optional[ChunkStore] = None) -> Tuple[List[str], float, str]:
+    def select(self, query: str, result: RetrievalResult, store: Optional[ChunkStore] = None,
+               params: Optional[HybridParams] = None) -> Tuple[List[str], float, str]:
         """Step 2: pick the chunks that go to the LLM. Returns
         (chunk_ids, confidence, retrieval_path)."""
         store = store if store is not None else result.store
+        params = params or result.params or self.default_params()
         chunk_ids, confidence = self._intelligent_retrieve(
             result.ranked, query, result.threshold, result.is_cross_domain, result.max_chunks, store=store
         )
@@ -1001,10 +1090,10 @@ class ComparisonEngine:
         # this query's own top candidates (never the full corpus) to
         # cross-encoder + on-demand embedding reranking, as a rare
         # last resort rather than a per-query default.
-        if self.lazy and confidence < self.ROUTER_LAST_RESORT_THRESHOLD and (
+        if self.lazy and confidence < params.last_resort_threshold and (
             self.cross_encoder.model is not None or self.embedding_ranker.model is not None
         ):
-            reranked = self._last_resort_rerank(query, result.ranked, store)
+            reranked = self._last_resort_rerank(query, result.ranked, store, params.last_resort_pool)
             escalated_ids, escalated_confidence = self._intelligent_retrieve(
                 reranked, query, result.threshold, result.is_cross_domain, result.max_chunks, store=store
             )
@@ -1041,22 +1130,27 @@ class ComparisonEngine:
             "retrieval_path": retrieval_path,
         }
 
-    def _run_rag(self, query: str, method: str, use_hybrid: bool, provider_configs: List[ProviderConfig]) -> Dict[str, Any]:
-        result = self.retrieve(query, use_hybrid)
-        chunk_ids, confidence, retrieval_path = self.select(query, result)
+    def _run_rag(self, query: str, method: str, use_hybrid: bool, provider_configs: List[ProviderConfig],
+                 params: Optional[HybridParams] = None) -> Dict[str, Any]:
+        result = self.retrieve(query, use_hybrid, params)
+        chunk_ids, confidence, retrieval_path = self.select(query, result, params=params)
         return self.answer(query, method, result, chunk_ids, confidence, retrieval_path, provider_configs)
 
-    def retrieve_for_remote(self, query: str, method: str = "hybrid", pool: int = 20) -> Dict[str, Any]:
+    def retrieve_for_remote(self, query: str, method: str = "hybrid", pool: int = 20,
+                            intensity: float = DEFAULT_INTENSITY) -> Dict[str, Any]:
         """What a host serves to a member: the top `pool` ranked chunks with
-        their texts (JSON-ready), no selection and no generation."""
-        result = self.retrieve(query, use_hybrid=(method != "standard"))
+        their texts (JSON-ready), no selection and no generation. `intensity`
+        is the member's Hybrid slider; the work is done (and bounded) here."""
+        result = self.retrieve(query, use_hybrid=(method != "standard"),
+                               params=self.params_for_intensity(intensity))
         top_ids = [cid for cid, _ in result.ranked[:pool]]
         texts = self._get_texts_batch(top_ids)
         meta = self._get_metadata_batch(top_ids)
         return result_to_wire(result, texts, meta, pool, time.perf_counter() - result.start)
 
-    def _hybrid_rag(self, query: str, provider_configs: List[ProviderConfig]) -> Dict[str, Any]:
-        return self._run_rag(query, "Hybrid RAG", use_hybrid=True, provider_configs=provider_configs)
+    def _hybrid_rag(self, query: str, provider_configs: List[ProviderConfig],
+                    params: Optional[HybridParams] = None) -> Dict[str, Any]:
+        return self._run_rag(query, "Hybrid RAG", use_hybrid=True, provider_configs=provider_configs, params=params)
 
     def _standard_rag(self, query: str, provider_configs: List[ProviderConfig]) -> Dict[str, Any]:
         return self._run_rag(query, "Standard RAG", use_hybrid=False, provider_configs=provider_configs)
@@ -1081,7 +1175,9 @@ class ComparisonEngine:
         }
 
     def compare(self, query: str, provider: Optional[str] = None, api_key: Optional[str] = None,
-                include_direct_ai: bool = True, force_hybrid: bool = False) -> Dict[str, Dict[str, Any]]:
+                include_direct_ai: bool = True, force_hybrid: bool = False,
+                intensity: float = DEFAULT_INTENSITY, model: Optional[str] = None,
+                base_url: Optional[str] = None, only_preferred: bool = False) -> Dict[str, Dict[str, Any]]:
         """Runs Standard and Hybrid RAG (both, unconditionally -- Hybrid is
         NOT routed/skipped here; see the hardcoded 'Forced Hybrid' decision
         below). This is deliberate for evaluation: every question gets a
@@ -1095,7 +1191,8 @@ class ComparisonEngine:
         never reads results["direct_ai"].
         """
         provider_configs = (
-            available_provider_configs(provider, key_override=api_key)
+            available_provider_configs(provider, key_override=api_key, model_override=model,
+                                       base_url_override=base_url, only_preferred=only_preferred)
             if provider is not None
             else self.provider_configs
         )
@@ -1106,7 +1203,7 @@ class ComparisonEngine:
         standard = self._standard_rag(query, provider_configs)
 
         if decision["chosen"] == "hybrid":
-            hybrid = self._hybrid_rag(query, provider_configs)
+            hybrid = self._hybrid_rag(query, provider_configs, self.params_for_intensity(intensity))
             decision["hybrid_confidence_calibrated"] = hybrid["confidence_score"]
             decision["standard_was_used"] = False
             decision["hybrid_was_skipped"] = False
@@ -1140,10 +1237,13 @@ class ComparisonEngine:
         return results
 
     def compare_single(self, query: str, method: str = "hybrid_rag",
-                       provider: str = "auto", api_key: Optional[str] = None) -> Dict[str, Any]:
-        provider_configs = available_provider_configs(provider, key_override=api_key)
+                       provider: str = "auto", api_key: Optional[str] = None,
+                       intensity: float = DEFAULT_INTENSITY, model: Optional[str] = None,
+                       base_url: Optional[str] = None, only_preferred: bool = False) -> Dict[str, Any]:
+        provider_configs = available_provider_configs(provider, key_override=api_key, model_override=model,
+                                                      base_url_override=base_url, only_preferred=only_preferred)
         if method == "hybrid_rag":
-            return self._hybrid_rag(query, provider_configs)
+            return self._hybrid_rag(query, provider_configs, self.params_for_intensity(intensity))
         elif method == "standard_rag":
             return self._standard_rag(query, provider_configs)
         elif method == "direct_ai":
@@ -1151,8 +1251,10 @@ class ComparisonEngine:
         else:
             raise ValueError(f"Unknown method: {method}")
 
-    def test_provider_connection(self, provider: str, api_key: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
-        provider_configs = available_provider_configs(provider, key_override=api_key)
+    def test_provider_connection(self, provider: str, api_key: Optional[str] = None, model: Optional[str] = None,
+                                 base_url: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+        provider_configs = available_provider_configs(provider, key_override=api_key, model_override=model,
+                                                      base_url_override=base_url, only_preferred=True)
         if not provider_configs:
             return "", {"provider": None, "notice": f"No usable configuration for '{provider}' (no API key found, typed or in env)."}
         return self._generate_answer("Reply with exactly: OK", "", "connection test", provider_configs)

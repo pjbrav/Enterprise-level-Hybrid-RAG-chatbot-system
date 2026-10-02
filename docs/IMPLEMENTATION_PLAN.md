@@ -369,6 +369,13 @@ less than 10 KB (only `state.db` rows).
 
 ## Phase 4 — Universal routing (any corpus, not just the 9 enterprise sources)
 
+> **STATUS: DONE.** Routing keywords resolve as defaults < generated per-corpus < `routing_config.yaml`, then are
+> filtered to partitions the corpus really has (for the 16 GB DB that is exactly today's behaviour; verified
+> identical partitions + rankings on 6 questions). Keywords are generated only for partitions that have none, so
+> edits survive re-ingest (`regenerate_keywords` discards them); attached databases are not auto-processed.
+> Per-partition searches run in parallel with spaCy run once per query. Heading-aware chunking applies to markdown
+> and PDF headings of new ingests only; text without headings chunks exactly as before.
+
 - `PARTITION_KEYWORDS` is a **class** attribute (:1657) that `_load_routing_config`
   overwrites. Make it an instance attribute. Resolution order: YAML override, then
   `corpora.partition_keywords_json`, then `_DEFAULT_PARTITION_KEYWORDS`, which is used
@@ -395,6 +402,11 @@ less than 10 KB (only `state.db` rows).
 ---
 
 ## Phase 5 — Hybrid-intensity slider and providers
+
+> **STATUS: DONE.** `rag/params.py` (`HybridParams.for_intensity`, 0.5 anchored to the engine's own defaults). The
+> host does the work the member's slider asks for (`intensity` in `/v1/retrieve`). Providers: Ollama first-class,
+> typed key/model/base URL apply to the selected provider, `only_preferred` stops silent fallback to environment keys,
+> empty env values count as unset, keys never touch `os.environ`.
 
 ### 5.1 Correction to the Cursor plan
 The Cursor plan's "Low" row says to lower `ROUTER_STANDARD_CONFIDENCE_HIGH` so that Standard
@@ -446,6 +458,10 @@ The Standard pipeline ignores params.
 
 ## Phase 6 — Gradio rewrite (`app.py`)
 
+> **STATUS: DONE.** All logic is in `rag/app_controller.py` (unit-tested without Gradio); `app.py` is layout. Added a
+> policy: the machine's own API keys are only used when the UI is bound to localhost (`UI_ALLOW_SERVER_KEYS` overrides).
+> Verified in a real browser: search (Testing mode), host start + code, join, member list.
+
 Tabs: **Search | My library | Host | Join | Evaluate | About**
 
 - **Global (top bar):** provider dropdown (OpenAI / Anthropic / Gemini / Ollama / OpenAI-compatible),
@@ -479,6 +495,9 @@ Tabs: **Search | My library | Host | Join | Evaluate | About**
 ---
 
 ## Phase 7 — Packaging and smoke test
+
+> **STATUS: DONE, except** the Docker image build and `docker compose up` were not run (no Docker daemon on the
+> dev machine); the compose file validates. `scripts/smoke_two_instances.py` is the automated two-process scenario.
 
 - `requirements.txt`: numpy, pandas, pyarrow, scikit-learn, spacy, sentence-transformers,
   PyYAML, openai, **anthropic, google-genai, psycopg2-binary, pymupdf, gradio>=4,

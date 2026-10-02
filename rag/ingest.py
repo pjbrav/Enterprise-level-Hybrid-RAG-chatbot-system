@@ -9,7 +9,7 @@ import zipfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from rag.config import AUTO_PARTITION_MAX_CORPUS_CHARS, CHUNK_OVERLAP, CHUNK_WORDS, GENERIC_FOLDER_NAMES, MAX_ZIP_FILES, MAX_ZIP_MEMBER_BYTES, SUPPORTED_EXTENSIONS, UPLOAD_DIR
 from rag.text import STOPWORDS, clean_text, estimate_tokens, extract_entities, stem_token
@@ -85,7 +85,10 @@ class DocumentProcessor:
             except ImportError as exc:
                 raise ImportError("PDF support requires: pip install pymupdf") from exc
             with fitz.open(path) as pdf:
-                return clean_text("\n".join(page.get_text() for page in pdf))
+                try:
+                    return clean_text(DocumentProcessor._pdf_text_with_headings(pdf))
+                except Exception:
+                    return clean_text("\n".join(page.get_text() for page in pdf))
         if suffix in {".txt", ".md", ".py", ".js"}:
             return clean_text(path.read_text(encoding="utf-8", errors="ignore"))
         if suffix == ".ipynb":
@@ -96,6 +99,32 @@ class DocumentProcessor:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"Invalid notebook JSON: {path.name}") from exc
         raise ValueError(f"Unsupported file type: {suffix}")
+
+    @staticmethod
+    def _pdf_text_with_headings(pdf) -> str:
+        """Page text where lines set clearly larger than the body text (>= 1.25x the
+        median font size, short, not a sentence) are marked as '# heading' so the
+        chunker can split on them like markdown headings."""
+        import statistics
+        pages, sizes = [], []
+        for page in pdf:
+            lines = []
+            for block in page.get_text("dict").get("blocks", []):
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    text = "".join(span["text"] for span in spans).strip()
+                    if text:
+                        size = max(span["size"] for span in spans)
+                        lines.append((text, size))
+                        sizes.append(size)
+            pages.append(lines)
+        median = statistics.median(sizes) if sizes else 0
+        out = []
+        for lines in pages:
+            for text, size in lines:
+                is_heading = median and size >= 1.25 * median and len(text.split()) <= 14 and not text.endswith(".")
+                out.append(f"\n# {text}\n" if is_heading else text)
+        return "\n".join(out)
 
     _CITATION_MARKER_RE = re.compile(r"\[\d{1,3}(?:,\s*\d{1,3})*\]|\(\d{4}[a-z]?\)|et al\.")
 
@@ -146,6 +175,25 @@ class DocumentProcessor:
             return "general"
         top = [term for term, _ in Counter(tokens).most_common(top_n)]
         return "_".join(top) or "general"
+
+    @staticmethod
+    def _cluster_names(matrix, labels, feature_names) -> Dict[Any, str]:
+        """Name each KMeans cluster after its two heaviest TF-IDF terms
+        ('partition_auth_token') instead of 'partition_cluster_3', so routing
+        keywords and the UI are meaningful. Falls back to the numeric label."""
+        import numpy as np
+        names: Dict[Any, str] = {}
+        used: Set[str] = set()
+        for label in sorted(set(labels)):
+            rows = [i for i, current in enumerate(labels) if current == label]
+            centroid = np.asarray(matrix[rows].mean(axis=0)).ravel()
+            terms = [re.sub(r"[^a-z0-9]+", "", feature_names[i].lower()) for i in centroid.argsort()[::-1][:2]]
+            name = "partition_" + "_".join(t for t in terms if t) if any(terms) else f"partition_cluster_{label}"
+            if name in used:
+                name = f"{name}_{label}"
+            used.add(name)
+            names[label] = name
+        return names
 
     # --------------------------------------------------------------------
     # NEW: Auto‑partitioning via content clustering (dump‑and‑go)
@@ -218,7 +266,8 @@ class DocumentProcessor:
             n_clusters = min(max(2, int(np.sqrt(n_docs))), 10, n_docs)
             kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
             labels = kmeans.fit_predict(X_reduced)
-            partition_map = {fp: f"partition_cluster_{label}" for fp, label in zip(valid_paths, labels)}
+            names = self._cluster_names(X, labels, vectorizer.get_feature_names_out())
+            partition_map = {fp: names[label] for fp, label in zip(valid_paths, labels)}
         for fp in file_paths:
             partition_map.setdefault(fp, "partition_general")
         return partition_map, texts
@@ -226,14 +275,11 @@ class DocumentProcessor:
     def _chunk_document(
         self, text: str, source_path: str, partition_id: str
     ) -> Tuple[Dict[str, str], Dict[str, ChunkMetadata]]:
-        words = clean_text(text).split()
         chunks: Dict[str, str] = {}
         metadata: Dict[str, ChunkMetadata] = {}
         source_hash = hashlib.sha1(str(Path(source_path).resolve()).encode("utf-8")).hexdigest()[:12]
-        step = max(1, CHUNK_WORDS - CHUNK_OVERLAP)
         chunk_number = 0
-        for start in range(0, len(words), step):
-            chunk_words = words[start:start + CHUNK_WORDS]
+        for chunk_words in self._chunk_word_lists(clean_text(text)):
             if len(chunk_words) < 25:
                 continue
             chunk_text = " ".join(chunk_words)
@@ -251,9 +297,47 @@ class DocumentProcessor:
                 token_count=estimate_tokens(chunk_text),
                 entity_count=len(entities),
             )
-            if start + CHUNK_WORDS >= len(words):
-                break
         return chunks, metadata
+
+    _HEADING_SPLIT_RE = re.compile(r"(?m)^(?=#{1,6}[ \t]+\S)")
+
+    @classmethod
+    def _chunk_word_lists(cls, text: str) -> List[List[str]]:
+        """Word lists for each chunk. Text with no headings is cut into overlapping
+        CHUNK_WORDS windows exactly as before. Text with markdown headings (or PDF
+        headings, see _pdf_text_with_headings) is split at those headings, and
+        neighbouring small sections are packed together up to CHUNK_WORDS, so a
+        chunk starts at a section boundary instead of cutting across unrelated
+        sections; a section longer than CHUNK_WORDS is still windowed with overlap."""
+        step = max(1, CHUNK_WORDS - CHUNK_OVERLAP)
+
+        def windows(words: List[str]) -> List[List[str]]:
+            out = []
+            for start in range(0, len(words), step):
+                out.append(words[start:start + CHUNK_WORDS])
+                if start + CHUNK_WORDS >= len(words):
+                    break
+            return out
+
+        sections = [part.split() for part in cls._HEADING_SPLIT_RE.split(text) if part.strip()]
+        if len(sections) <= 1:
+            return windows(text.split())
+        packed: List[List[str]] = []
+        buffer: List[str] = []
+        for section in sections:
+            if len(section) > CHUNK_WORDS:
+                if buffer:
+                    packed.append(buffer)
+                    buffer = []
+                packed.extend(windows(section))
+            elif len(buffer) + len(section) <= CHUNK_WORDS:
+                buffer = buffer + section
+            else:
+                packed.append(buffer)
+                buffer = list(section)
+        if buffer:
+            packed.append(buffer)
+        return packed
 
     def _extract_zip(self, archive_path: Path, summary: IngestionSummary) -> Tuple[List[Path], Set[str]]:
         """Extract supported members, preserving the archive's internal
@@ -425,7 +509,7 @@ def select_files_dialog() -> List[str]:
         root.withdraw()
         root.attributes("-topmost", True)
         files = filedialog.askopenfilenames(
-            title="Select research papers",
+            title="Select documents",
             filetypes=[("Supported research files", "*.pdf *.txt *.md *.py *.js *.ipynb *.zip"), ("All files", "*.*")],
         )
         root.destroy()

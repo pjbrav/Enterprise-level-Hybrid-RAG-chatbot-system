@@ -36,7 +36,7 @@ class JoinRequest(BaseModel):
 class RetrieveRequest(BaseModel):
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     method: str = Field(default="hybrid", pattern="^(hybrid|standard)$")
-    intensity: float = Field(default=0.5, ge=0.0, le=1.0)   # applied from Phase 5 (HybridParams)
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)   # Hybrid slider: how much work this host does
     pool: int = Field(default=20, ge=1, le=MAX_POOL)
 
 
@@ -75,7 +75,7 @@ def create_host_app(manager: CorpusManager, corpus_id: str) -> FastAPI:
     @app.post("/v1/retrieve")
     def retrieve(body: RetrieveRequest, member: Membership = Depends(current_member)) -> Dict[str, Any]:
         _, _, engine = manager.get_engine(corpus_id)
-        return engine.retrieve_for_remote(body.query, method=body.method, pool=body.pool)
+        return engine.retrieve_for_remote(body.query, method=body.method, pool=body.pool, intensity=body.intensity)
 
     @app.post("/v1/leave")
     def leave(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:

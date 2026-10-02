@@ -581,6 +581,11 @@ class DatabaseManager:
             for row in rows
         }
 
+    def get_partition_ids(self) -> List[str]:
+        """Distinct partition ids (index-only scan; ~2.5 s cold on the 1.9M-chunk DB)."""
+        return [row["partition_id"] for row in self._query(
+            "SELECT DISTINCT partition_id FROM chunks ORDER BY partition_id", fetch=True)]
+
     def get_partition_counts(self) -> Dict[str, int]:
         """Cheap partition sizes (a GROUP BY COUNT, not a full row fetch) --
         used for router/context stats without materialising chunk-id lists."""

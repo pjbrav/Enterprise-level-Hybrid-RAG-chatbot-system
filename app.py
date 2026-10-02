@@ -1,201 +1,268 @@
+"""Gradio UI for Hybrid RAG.
+
+Tabs: Search | My library | Host | Join | Evaluate | About.
+All behaviour lives in rag.app_controller.AppController; this file is layout and wiring.
+
+The admin UI binds to 127.0.0.1 by default. Only the read-only host API (a separate
+port, started from the Host tab) is reachable from the network.
 """
-Gradio web UI for Hybrid RAG.
-Users paste their OpenAI API key, type a query, and get answers.
-The database lives server-side — users never download anything.
-"""
+
+from __future__ import annotations
 
 import os
-import sys
-from pathlib import Path
+
 import gradio as gr
-from v24 import build_large_corpus_engine
 
-print("Loading Hybrid RAG system (1.9M chunks, 34M entities)...")
-db, processor, engine = build_large_corpus_engine()
-print("System ready.")
+from rag.app_controller import (MODE_PRODUCTION, MODE_TESTING, PROVIDER_LABELS, AppController, ProviderSettings)
 
+DEFAULT_HOST_PORT = int(os.getenv("HOST_PORT", "8765"))
+LOCAL_PROVIDER_LABELS = {"Ollama (local)"}
+URL_PROVIDER_LABELS = {"Ollama (local)", "OpenAI-compatible"}
 
-def search(query: str, api_key: str, compare_mode: bool):
-    """Run a query and return formatted results."""
-    if not query.strip():
-        return "Please enter a query.", ""
-    if not api_key.strip():
-        return "Please paste your OpenAI API key.", ""
-    if not api_key.strip().startswith("sk-"):
-        return "Invalid API key format. Should start with 'sk-'.", ""
+ABOUT = """
+## How it works
 
-    key = api_key.strip()
-    os.environ["OPENAI_API_KEY"] = key  # fallback for engine internals
+**Standard RAG:** question -> keyword search -> top chunks -> LLM.
 
-    try:
-        if compare_mode:
-            # True side-by-side: both pipelines run unconditionally,
-            # no third direct-AI call.
-            results = engine.compare(
-                query, provider="auto", api_key=key,
-                include_direct_ai=False, force_hybrid=True,
-            )
-        else:
-            # Single forced-Hybrid query (full quality path).
-            results = {
-                "hybrid_rag": engine.compare_single(
-                    query, method="hybrid_rag", provider="auto", api_key=key,
-                )
-            }
+**Hybrid RAG:** question -> entity extraction + partition routing -> keyword search **and** entity graph per partition
+-> rank fusion -> (rarely) cross-encoder rerank -> LLM. It reaches the right evidence with fewer tokens.
 
-        labels = {
-            "hybrid_rag": "Hybrid RAG",
-            "standard_rag": "Standard RAG",
-            "direct_ai": "Direct AI (no retrieval)",
-        }
+**Hybrid intensity** (0 -> 1) controls how much work Hybrid does: candidate pool size, how many partitions are searched
+and when the rerank step kicks in. 0.5 is the configuration the published evaluation used.
 
-        output_parts = []
-        for method, data in results.items():
-            label = labels.get(method, method)
-            answer = data.get("answer", "No answer generated.")
-            confidence = data.get("confidence_score", 0) or 0
-            latency = data.get("latency", 0) or 0
-            tokens = data.get("tokens_used", 0) or 0
-            chunks = data.get("chunks_retrieved", 0) or 0
-            savings = data.get("token_savings_percent_vs_standard")
+## Sharing a corpus
+Anyone can **host** a corpus from their own machine: issue a one-time code, share the URL and code, and members query it
+remotely. Members never download the files or the database; they receive only the top few chunks for each question,
+held in memory for that request. Answers are generated on the member's machine with the member's own API key.
+The host can **kick** a member at any time and their access stops immediately.
 
-            stats = (
-                f"📊 **Confidence:** {confidence:.1%} | "
-                f"⏱️ **Latency:** {latency:.1f}s | "
-                f"**Tokens:** {tokens} | "
-                f"**Chunks:** {chunks}"
-            )
-            if savings is not None:
-                stats += f" | **Token savings vs Standard:** {savings:.1f}%"
-
-            output_parts.append(f"## {label}\n\n{answer}\n\n---\n{stats}")
-
-        sources = ""
-        for method, data in results.items():
-            label = labels.get(method, method)
-            source_list = data.get("sources", []) or []
-            if source_list:
-                sources += f"### {label} — Retrieved from:\n"
-                for src in source_list:
-                    sources += f"- {src}\n"
-                sources += "\n"
-
-        return "\n\n---\n\n".join(output_parts), sources
-
-    except Exception as e:
-        return f"Error: {str(e)}", ""
+## Privacy
+- API keys you type are kept in memory for the request only; they are not written to disk or to environment variables.
+- Only the question and the retrieved chunks are sent to the LLM provider you choose.
+- Host/member traffic is plain HTTP: use a trusted network or a tunnel. The one-time code is the only secret.
+- Relevance numbers are lexical overlap *proxies*, not accuracy scores.
+"""
 
 
-def run_eval(num_questions: int, api_key: str):
-    """Run a quick evaluation and return summary stats."""
-    if not api_key.strip().startswith("sk-"):
-        return "Please paste a valid OpenAI API key."
-
-    os.environ["OPENAI_API_KEY"] = api_key.strip()
-
-    try:
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent / "scripts" / "batch_compare_v2.py"), "--force-hybrid",
-             "--sample", str(int(num_questions)), "--output", "web_eval"],
-            capture_output=True, text=True, timeout=600, cwd=str(Path(__file__).parent)
-        )
-        return result.stdout if result.returncode == 0 else result.stderr
-    except subprocess.TimeoutExpired:
-        return "Evaluation timed out. Try fewer questions."
-    except Exception as e:
-        return f"Error: {str(e)}"
+def _settings(label, key, model, base_url) -> ProviderSettings:
+    return ProviderSettings(PROVIDER_LABELS.get(label, "openai"), (key or "").strip(), (model or "").strip(),
+                            (base_url or "").strip())
 
 
-with gr.Blocks(title="Hybrid RAG — Enterprise Search") as app:
+def build_app(controller: AppController | None = None) -> gr.Blocks:
+    ctl = controller or AppController()
 
-    gr.HTML("""
-    <div style="text-align:center; margin-bottom:20px;">
-    <h1>🔍 Hybrid RAG — Multi-Source Enterprise Search</h1>
-    <p>Search across 1.9M chunks from 9 enterprise data sources (Slack, Gmail, GitHub, Jira, Confluence, HubSpot, Linear, Fireflies, Google Drive).</p>
-    <p>Entity knowledge graph with 34M rows • FTS5 + RRF + Cross-encoder reranking</p>
-    </div>
-    """)
+    with gr.Blocks(title="Hybrid RAG") as demo:
+        gr.Markdown("# Hybrid RAG\nAsk questions over your own documents or a corpus someone shares with you, "
+                    "using fewer tokens than standard RAG.")
 
-    with gr.Tab("Search"):
-        api_input = gr.Textbox(
-            label="OpenAI API Key",
-            placeholder="sk-...",
-            type="password",
-            info="Your key is used only for this request — it's not stored."
-        )
-
-        query_input = gr.Textbox(
-            label="Query",
-            placeholder="e.g., What GitHub PRs relate to the Proxima Bank 429 incident?",
-            lines=2
-        )
-
+        # ---- provider bar (shared by Search / Evaluate) ---------------------------
         with gr.Row():
-            compare_checkbox = gr.Checkbox(
-                label="Compare Standard vs Hybrid side-by-side (runs both pipelines)",
-                value=False
-            )
-            search_btn = gr.Button("Search", variant="primary")
+            provider = gr.Dropdown(list(PROVIDER_LABELS), value="OpenAI", label="LLM provider", scale=2)
+            model = gr.Textbox(label="Model (optional)", placeholder="provider default", scale=2)
+            api_key = gr.Textbox(label="API key", type="password", placeholder="kept in memory only; never saved", scale=3)
+            base_url = gr.Textbox(label="Base URL", placeholder="http://localhost:11434/v1", visible=False, scale=3)
+        with gr.Row():
+            test_btn = gr.Button("Test connection", size="sm", scale=0)
+            test_status = gr.Markdown("")
 
-        answer_output = gr.Markdown(label="Answer")
-        sources_output = gr.Markdown(label="Sources")
+        def on_provider(label):
+            return (gr.Textbox(visible=label not in LOCAL_PROVIDER_LABELS),
+                    gr.Textbox(visible=label in URL_PROVIDER_LABELS))
 
-        search_btn.click(
-            fn=search,
-            inputs=[query_input, api_input, compare_checkbox],
-            outputs=[answer_output, sources_output]
-        )
+        provider.change(on_provider, provider, [api_key, base_url])
+        test_btn.click(lambda p, k, m, b: ctl.test_connection(_settings(p, k, m, b)),
+                       [provider, api_key, model, base_url], test_status)
 
-    with gr.Tab("Evaluate"):
-        gr.Markdown("""
-        ### Quick Evaluation
-        Run a sample of questions to see Standard vs Hybrid performance.
-        This uses your API key and may take several minutes.
-        """)
-        eval_api = gr.Textbox(
-            label="OpenAI API Key",
-            placeholder="sk-...",
-            type="password"
-        )
-        num_q = gr.Slider(
-            minimum=5, maximum=50, value=10, step=5,
-            label="Number of questions"
-        )
-        eval_btn = gr.Button("Run Evaluation", variant="primary")
-        eval_output = gr.Textbox(label="Results", lines=15)
+        # Created here (rendered inside the Host tab) so the Library handlers can refresh it.
+        h_corpus = gr.Dropdown(ctl.corpus_choices(), label="Corpus to host", scale=3, render=False)
 
-        eval_btn.click(
-            fn=run_eval,
-            inputs=[num_q, eval_api],
-            outputs=[eval_output]
-        )
+        with gr.Tabs():
+            # ======================= Search =======================
+            with gr.Tab("Search"):
+                sources = gr.CheckboxGroup(label="Search in", choices=ctl.source_choices(), value=[])
+                refresh_sources = gr.Button("Refresh list", size="sm")
+                question = gr.Textbox(label="Question", lines=2, placeholder="Ask anything about the selected corpora")
+                with gr.Row():
+                    mode = gr.Radio([MODE_PRODUCTION, MODE_TESTING], value=MODE_PRODUCTION, label="Mode", scale=2)
+                    intensity = gr.Slider(0.0, 1.0, value=0.5, step=0.05, scale=3,
+                                          label="Hybrid intensity (faster <- 0 ... 1 -> more thorough)")
+                run_btn = gr.Button("Search", variant="primary")
+                banner = gr.Markdown("")
+                with gr.Row(equal_height=False):
+                    standard_out = gr.Markdown("", label="Standard RAG")
+                    hybrid_out = gr.Markdown("", label="Hybrid RAG")
 
-    with gr.Tab("About"):
-        gr.Markdown("""
-        ## Architecture
+                def do_search(q, srcs, md, inten, p, k, m, b):
+                    res = ctl.search(q, srcs, md, inten, _settings(p, k, m, b))
+                    if res.get("error"):
+                        return res["error"], "", ""
+                    standard, hybrid = res["standard"], res["hybrid"]
+                    savings = ctl.token_savings(standard, hybrid)
+                    std_md = ctl.render_result("Standard RAG", standard) if standard else \
+                        "### Standard RAG\n\n_Not run in Production mode. Switch to Testing to compare._"
+                    return "", std_md, ctl.render_result("Hybrid RAG", hybrid, savings, res.get("no_key", False))
 
-        **Standard RAG:** Query → FTS5 (BM25) → Top 5 chunks → LLM → Answer
+                run_btn.click(do_search, [question, sources, mode, intensity, provider, api_key, model, base_url],
+                              [banner, standard_out, hybrid_out])
+                question.submit(do_search, [question, sources, mode, intensity, provider, api_key, model, base_url],
+                                [banner, standard_out, hybrid_out])
+                refresh_sources.click(lambda cur: gr.CheckboxGroup(choices=ctl.source_choices(), value=cur), sources, sources)
 
-        **Hybrid RAG:** Query → spaCy NER → Partition Routing → FTS5 + Entity Graph → RRF Fusion → Cross-encoder Reranking → LLM → Answer
+            # ======================= My library =======================
+            with gr.Tab("My library"):
+                gr.Markdown("Upload documents for **this machine only**. They are indexed locally and are separate from "
+                            "anything you host or join.")
+                with gr.Row():
+                    lib_name = gr.Textbox(label="Corpus name", value="My documents", scale=2)
+                    lib_retain = gr.Checkbox(label="Keep after I close the app", value=True, scale=1)
+                lib_files = gr.File(label="Files (pdf, txt, md, py, js, ipynb, or a zip)", file_count="multiple",
+                                    type="filepath")
+                lib_btn = gr.Button("Index documents", variant="primary")
+                lib_msg = gr.Markdown("")
+                gr.Markdown("### Corpora on this machine")
+                lib_table = gr.Dataframe(headers=["Name", "Role", "Backend", "Mode", "Retention", "Docs", "Chunks",
+                                                  "Partitions", "id"], value=ctl.corpus_rows(), interactive=False,
+                                         wrap=True)
+                with gr.Row():
+                    manage_corpus = gr.Dropdown(ctl.corpus_choices(), label="Manage corpus", scale=3)
+                    lib_refresh = gr.Button("Refresh", size="sm", scale=1)
+                    lib_delete = gr.Button("Delete corpus", variant="stop", size="sm", scale=1)
+                manage_msg = gr.Markdown("")
+                with gr.Accordion("Routing keywords (partition: keyword, keyword, ...)", open=False):
+                    kw_text = gr.Textbox(lines=8, label="Keywords used to route a question to partitions")
+                    with gr.Row():
+                        kw_save = gr.Button("Save keywords", size="sm")
+                        kw_regen = gr.Button("Regenerate (discards edits)", size="sm")
+                with gr.Accordion("Attach an existing SQLite database (read-only)", open=False):
+                    gr.Markdown("For a Hybrid RAG database you already built (for example `data/hybrid_rag_v22.db`). "
+                                "It is opened read-only and never copied or modified.")
+                    with gr.Row():
+                        att_path = gr.Textbox(label="Path to .db file", scale=3)
+                        att_name = gr.Textbox(label="Name", scale=1)
+                    att_btn = gr.Button("Attach", size="sm")
+                    att_msg = gr.Markdown("")
 
-        ## Results (500-question evaluation)
+                def refresh_library(current=None):
+                    """table, manage dropdown, search checklist, host dropdown"""
+                    return (ctl.corpus_rows(), gr.Dropdown(choices=ctl.corpus_choices(), value=current),
+                            gr.CheckboxGroup(choices=ctl.source_choices()), gr.Dropdown(choices=ctl.corpus_choices()))
 
-        | Metric | Standard | Hybrid | Difference |
-        |--------|----------|--------|------------|
-        | Answer relevance | 65.3% | 66.1% | +0.9 pp |
-        | Token usage | 459,014 | 423,874 | -7.7% |
-        | Win rate | 36% | 39% | +3 pp |
+                lib_outputs = [lib_table, manage_corpus, sources, h_corpus]
 
-        ## Dataset
-        - 1,924,473 chunks across 9 enterprise data sources
-        - 34M entity rows in the knowledge graph
-        - 500 evaluation questions across 10 question types
+                def do_index(name, files, retain):
+                    msg = ctl.add_documents(name, files or [], retain)
+                    return (msg, *refresh_library())
 
-        ## Privacy
-        Your OpenAI API key is sent directly to OpenAI's API from this server.
-        It is not stored, logged, or shared. Only the query and retrieved chunks
-        are sent to OpenAI for answer generation.
-        """)
+                lib_btn.click(do_index, [lib_name, lib_files, lib_retain], [lib_msg, *lib_outputs])
+                lib_refresh.click(lambda c: refresh_library(c), manage_corpus, lib_outputs)
 
-app.launch(server_name="0.0.0.0", server_port=7860)
+                def do_delete(cid):
+                    msg = ctl.delete_corpus(cid)
+                    return (msg, *refresh_library())
+
+                lib_delete.click(do_delete, manage_corpus, [manage_msg, *lib_outputs])
+                manage_corpus.change(lambda c: ctl.keywords_text(c), manage_corpus, kw_text)
+                kw_save.click(lambda c, t: ctl.save_keywords(c, t), [manage_corpus, kw_text], manage_msg)
+                kw_regen.click(lambda c: (ctl.regenerate_keywords(c), ctl.keywords_text(c)), manage_corpus, [manage_msg, kw_text])
+
+                def do_attach(path, name):
+                    msg = ctl.attach_database(name, path)
+                    return (msg, *refresh_library())
+
+                att_btn.click(do_attach, [att_path, att_name], [att_msg, *lib_outputs])
+
+            # ======================= Host =======================
+            with gr.Tab("Host"):
+                gr.Markdown("Share one of your corpora. Members search it from their own machine without ever receiving "
+                            "your files or database. **Only you** can add, replace or delete what is hosted (under *My library*).")
+                with gr.Row():
+                    h_corpus.render()
+                    h_port = gr.Number(value=DEFAULT_HOST_PORT, precision=0, label="Port", scale=1)
+                with gr.Row():
+                    h_start = gr.Button("Start hosting", variant="primary")
+                    h_stop = gr.Button("Stop hosting")
+                    h_remove = gr.Checkbox(label="...and remove all members", value=False)
+                h_status = gr.Markdown("Not hosting.")
+                with gr.Row():
+                    h_ttl = gr.Slider(5, 240, value=30, step=5, label="Code valid for (minutes)")
+                    h_uses = gr.Number(value=10, precision=0, label="Max joins per code")
+                with gr.Row():
+                    h_issue = gr.Button("Issue one-time code")
+                    h_rotate = gr.Button("Rotate (invalidate old codes)")
+                h_code = gr.Markdown("")
+                h_alert = gr.Markdown("")
+                gr.Markdown("### Members")
+                h_members = gr.Dataframe(headers=["id", "Name", "Address", "Joined", "Last seen"], interactive=False)
+                with gr.Row():
+                    h_kick_id = gr.Number(label="Member id to remove", precision=0, scale=2)
+                    h_kick = gr.Button("Kick", variant="stop", scale=1)
+                h_kick_msg = gr.Markdown("")
+                h_timer = gr.Timer(5)
+
+                def refresh_host(cid):
+                    return ctl.members_rows(cid), ctl.security_banner(cid), ctl.host_status(cid)
+
+                h_corpus.change(refresh_host, h_corpus, [h_members, h_alert, h_status])
+                h_timer.tick(lambda cid: refresh_host(cid)[:2], h_corpus, [h_members, h_alert])
+                h_start.click(lambda cid, port: ctl.start_hosting(cid, port), [h_corpus, h_port], h_status)
+                h_stop.click(lambda cid, rm: ctl.stop_hosting(cid, rm), [h_corpus, h_remove], h_status)
+                h_issue.click(lambda cid, ttl, n: ctl.issue_otp(cid, ttl, n), [h_corpus, h_ttl, h_uses], h_code)
+                h_rotate.click(lambda cid, ttl, n: ctl.issue_otp(cid, ttl, n, rotate=True), [h_corpus, h_ttl, h_uses], h_code)
+                h_kick.click(lambda mid, cid: (ctl.kick(mid), ctl.members_rows(cid)), [h_kick_id, h_corpus], [h_kick_msg, h_members])
+
+            # ======================= Join =======================
+            with gr.Tab("Join"):
+                gr.Markdown("Join a corpus someone else is hosting. **Nothing is downloaded**: only a membership token is "
+                            "stored on this machine, and the host can remove you at any time.")
+                with gr.Row():
+                    j_url = gr.Textbox(label="Host URL", placeholder="http://192.168.1.20:8765", scale=3)
+                    j_otp = gr.Textbox(label="One-time code", placeholder="6 digits", scale=1)
+                    j_name = gr.Textbox(label="Your name", value="member", scale=2)
+                j_btn = gr.Button("Join", variant="primary")
+                j_msg = gr.Markdown("")
+                gr.Markdown("### Corpora you joined")
+                j_table = gr.Dataframe(headers=["id", "Corpus", "Host", "Your name", "Status"], value=ctl.joins_rows(),
+                                       interactive=False, wrap=True)
+                with gr.Row():
+                    j_leave_id = gr.Number(label="id to leave", precision=0, scale=2)
+                    j_leave = gr.Button("Leave", scale=1)
+
+                def do_join(url, otp, name):
+                    msg = ctl.join(url, otp, name)
+                    return msg, ctl.joins_rows(), gr.CheckboxGroup(choices=ctl.source_choices())
+
+                def do_leave(jid):
+                    msg = ctl.leave(jid)
+                    return msg, ctl.joins_rows(), gr.CheckboxGroup(choices=ctl.source_choices())
+
+                j_btn.click(do_join, [j_url, j_otp, j_name], [j_msg, j_table, sources])
+                j_leave.click(do_leave, j_leave_id, [j_msg, j_table, sources])
+
+            # ======================= Evaluate =======================
+            with gr.Tab("Evaluate"):
+                gr.Markdown("Runs a sample of the evaluation questions against `data/hybrid_rag_v22.db` (Standard vs Hybrid) "
+                            "using the provider selected above. This uses your API key and can take several minutes.")
+                e_n = gr.Slider(5, 50, value=10, step=5, label="Number of questions")
+                e_btn = gr.Button("Run evaluation", variant="primary")
+                e_out = gr.Textbox(label="Results", lines=15)
+                e_btn.click(lambda n, p, k, m, b: ctl.run_eval(n, _settings(p, k, m, b)),
+                            [e_n, provider, api_key, model, base_url], e_out)
+
+            with gr.Tab("About"):
+                gr.Markdown(ABOUT)
+
+        # Populate everything fresh whenever the page is (re)loaded.
+        demo.load(lambda: (gr.CheckboxGroup(choices=ctl.source_choices()), ctl.corpus_rows(),
+                           gr.Dropdown(choices=ctl.corpus_choices()), gr.Dropdown(choices=ctl.corpus_choices()),
+                           ctl.joins_rows()),
+                  None, [sources, lib_table, manage_corpus, h_corpus, j_table])
+    return demo
+
+
+if __name__ == "__main__":
+    build_app().launch(
+        server_name=os.getenv("GRADIO_BIND", "127.0.0.1"),
+        server_port=int(os.getenv("GRADIO_PORT", "7860")),
+        theme=gr.themes.Soft(),
+    )

@@ -19,6 +19,7 @@ import httpx
 
 from rag.corpora import CorpusManager
 from rag.db import ChunkMetadata
+from rag.params import DEFAULT_INTENSITY
 from rag.providers import ProviderConfig
 from rag.retrieval import ChunkStore, RetrievalResult, wire_to_result
 from rag.state import JoinRecord
@@ -181,7 +182,8 @@ class FederatedSearch:
         return self.manager.scratch_engine()
 
     def run(self, query: str, local_ids: Sequence[str], join_ids: Sequence[int], use_hybrid: bool,
-            provider_configs: List[ProviderConfig], method: Optional[str] = None) -> Dict[str, Any]:
+            provider_configs: List[ProviderConfig], method: Optional[str] = None,
+            intensity: float = DEFAULT_INTENSITY) -> Dict[str, Any]:
         method = method or ("Hybrid RAG" if use_hybrid else "Standard RAG")
         if not local_ids and not join_ids:
             raise ValueError("Select at least one corpus to search.")
@@ -189,7 +191,8 @@ class FederatedSearch:
         # Fast path: one local corpus, no hosts -> the unchanged single-corpus pipeline.
         if len(local_ids) == 1 and not join_ids:
             engine = self.manager.get_engine(local_ids[0])[2]
-            out = engine._run_rag(query, method, use_hybrid, provider_configs)
+            out = engine._run_rag(query, method, use_hybrid, provider_configs,
+                                  params=engine.params_for_intensity(intensity) if use_hybrid else None)
             out["warnings"], out["origins"] = [], {"mine": out["chunks_retrieved"]}
             return out
 
@@ -205,7 +208,7 @@ class FederatedSearch:
         def run_local(idx_cid: Tuple[int, str]):
             idx, cid = idx_cid
             db, _, eng = self.manager.get_engine(cid)
-            res = eng.retrieve(query, use_hybrid)
+            res = eng.retrieve(query, use_hybrid, eng.params_for_intensity(intensity) if use_hybrid else None)
             res.store = local_chunk_store(db, res)
             return (self._label("mine", idx, len(local_ids)), res)
 
@@ -214,7 +217,7 @@ class FederatedSearch:
             label = self._label("host", idx, len([x for x in joins if x]))
             try:
                 res = RemoteCorpus(j, self.remote_timeout).retrieve(
-                    query, "hybrid" if use_hybrid else "standard", pool=self.pool)
+                    query, "hybrid" if use_hybrid else "standard", intensity=intensity, pool=self.pool)
                 return label, res, None
             except MembershipRevoked as exc:
                 self.manager.state.set_join_status(j.id, "revoked", str(exc))
@@ -238,7 +241,8 @@ class FederatedSearch:
         if not parts:
             raise NoSourcesAvailable(warnings)
         fused = fuse_results(engine, parts, start)
-        chunk_ids, confidence, path = engine.select(query, fused)
+        chunk_ids, confidence, path = engine.select(
+            query, fused, params=engine.params_for_intensity(intensity) if use_hybrid else None)
         out = engine.answer(query, method, fused, chunk_ids, confidence, path, provider_configs)
         origins: Dict[str, int] = defaultdict(int)
         for cid in chunk_ids:

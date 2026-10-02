@@ -20,6 +20,7 @@ from rag.config import CORPORA_DIR
 from rag.db import DatabaseManager
 from rag.engine import build_large_corpus_engine
 from rag.ingest import DocumentProcessor, IngestionSummary
+from rag.routing_autogen import generate_partition_keywords
 from rag.state import Corpus, StateStore
 
 
@@ -103,8 +104,40 @@ class CorpusManager:
             raise PermissionError(f"Corpus {corpus.name!r} is attached read-only; ingestion is disabled.")
         db = self._db_for(corpus)
         summary = DocumentProcessor(db, lazy=True).process_uploads(file_paths, force=force)
+        if summary.processed:
+            self._fill_missing_keywords(corpus, db)
         self.invalidate(corpus_id)
         return summary
+
+    # -- routing keywords ------------------------------------------------------------
+    def _fill_missing_keywords(self, corpus: Corpus, db: DatabaseManager) -> None:
+        """Generate keywords for partitions that have none yet. Existing entries are
+        kept, so keywords a user edited are never overwritten by a re-ingest."""
+        try:
+            generated = generate_partition_keywords(db)
+        except Exception as exc:
+            print(f"Warning: routing keyword generation failed: {exc}")
+            return
+        current = self.state.get_corpus(corpus.id).partition_keywords
+        merged = {**generated, **current}
+        if merged != current:
+            self.state.set_partition_keywords(corpus.id, merged)
+
+    def regenerate_keywords(self, corpus_id: str) -> Dict[str, List[str]]:
+        """Replace all keywords with freshly generated ones (discards manual edits).
+        Slow on a very large attached database (entity statistics over millions of rows)."""
+        corpus = self._require(corpus_id)
+        generated = generate_partition_keywords(self._db_for(corpus))
+        self.state.set_partition_keywords(corpus_id, generated)
+        self.invalidate(corpus_id)
+        return generated
+
+    def set_keywords(self, corpus_id: str, keywords: Dict[str, List[str]]) -> None:
+        """Save user-edited routing keywords ({partition_id: [keyword, ...]})."""
+        self._require(corpus_id)
+        cleaned = {pid: [k.strip().lower() for k in kws if k and k.strip()] for pid, kws in keywords.items()}
+        self.state.set_partition_keywords(corpus_id, {pid: kws for pid, kws in cleaned.items() if kws})
+        self.invalidate(corpus_id)
 
     # -- engines -----------------------------------------------------------------
     def get_engine(self, corpus_id: str) -> Tuple[DatabaseManager, DocumentProcessor, Any]:
@@ -125,6 +158,7 @@ class CorpusManager:
             else:
                 built = build_large_corpus_engine(db_path=corpus.location, database_url="",
                                                   read_only=corpus.read_only)
+            built[2].set_partition_keywords(corpus.partition_keywords)
             with self._lock:
                 self._engines[corpus_id] = built
                 while len(self._engines) > self.max_engines:
@@ -178,4 +212,9 @@ class CorpusManager:
         return removed
 
     def register_exit_sweep(self) -> None:
-        atexit.register(self.sweep_one_shot)
+        def sweep() -> None:
+            try:
+                self.sweep_one_shot()
+            except Exception:
+                pass  # data directory already gone (e.g. a temp dir) -- nothing left to sweep
+        atexit.register(sweep)

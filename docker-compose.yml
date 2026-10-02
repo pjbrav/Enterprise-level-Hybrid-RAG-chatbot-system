@@ -1,0 +1,42 @@
+# docker compose up --build
+#   UI:        http://localhost:7860   (type your own API key in the UI; the server's keys are not used)
+#   Host API:  port 8765 (only serves anything after you click "Start hosting")
+#
+# Corpora live in PostgreSQL (one schema per corpus). To attach the large evaluation database instead,
+# put hybrid_rag_v22.db in ./data and attach /app/data/hybrid_rag_v22.db under "My library" (read-only).
+# For SQLite-only, delete the DATABASE_URL line below.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-locally}
+      POSTGRES_DB: rag
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"      # local only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD:-change-me-locally}@postgres:5432/rag
+      GRADIO_BIND: 0.0.0.0
+      HOST_BIND: 0.0.0.0
+    ports:
+      - "7860:7860"
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+
+volumes:
+  pgdata:

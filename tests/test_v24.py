@@ -1,10 +1,10 @@
 """
-Unit tests for v23.py — core components that don't require a database.
+Unit tests for v24.py / the rag package — core components that don't require a database.
 
 Run:
-    python -m pytest test_v24.py -v
+    python -m pytest tests/test_v24.py -v
     # or without pytest:
-    python test_v24.py
+    python tests/test_v24.py
 """
 
 import os
@@ -14,8 +14,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-# Ensure v23 is importable
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure v24 (repo root) is importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 
 
 class TestEntityExtraction(unittest.TestCase):

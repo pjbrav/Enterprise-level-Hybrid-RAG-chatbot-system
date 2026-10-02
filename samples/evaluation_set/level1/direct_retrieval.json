@@ -1,0 +1,242 @@
+[
+  {
+    "eval_id": "AVL-2026-L1-001",
+    "complexity_level": 1,
+    "domain": "Operations — Incident Classification",
+    "question": "What is the financial threshold that upgrades a Tier-2 logistics incident to a 'Critical Exception' requiring Regional VP sign-off?",
+    "ground_truth_answer": "The financial threshold is $10,000 USD. According to SOP OP-204 Section 4.2, if the compounding costs, fines, or penalties of a single Tier-2 incident exceed $10,000 USD, the incident escalates to a 'Critical Exception.' Critical Exceptions bypass local managers and strictly require the formal written sign-off of the respective Regional Operations Vice President.",
+    "required_context_nodes": [
+      {
+        "document_id": "OP-204-INCIDENT-MGMT",
+        "file_path": "documents/operations/OP-204_Incident_Management_v4.md",
+        "critical_text_snippet": "Section 4.2: Tier-2 logistical delays are categorized by financial impact. If the compounding costs, fines, or penalties of a single Tier-2 incident exceed $10,000 USD, the incident escalates to a 'Critical Exception'. Critical Exceptions bypass local managers and strictly require the formal written sign-off of the respective Regional Operations Vice President."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["$10,000", "Critical Exception", "Regional Vice President"],
+      "negative_constraints": ["no threshold", "unlimited", "$20,000"]
+    },
+    "source_documents": ["documents/operations/OP-204_Incident_Management_v4.md"],
+    "tags": ["tier-2", "critical-exception", "threshold", "escalation"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-002",
+    "complexity_level": 1,
+    "domain": "Operations — Equipment Specifications",
+    "question": "What is the maximum allowable psi for Valve-B on the H2-Nexus cargo handling system?",
+    "ground_truth_answer": "The maximum allowable operating pressure for Valve-B (H2-NEX-001) on the H2-Nexus system is 2,800 psi (193 bar). The maximum allowable test pressure is 4,200 psi (290 bar). These specifications are defined in the Bill of Materials document BOM-FLT-H2NEX, Section 3.1.",
+    "required_context_nodes": [
+      {
+        "document_id": "BOM-FLT-H2NEX",
+        "file_path": "documents/supply_chain/BOM-FLT-H2NEX.md",
+        "critical_text_snippet": "Hydraulic Valve-B (Primary Lifting Circuit): Maximum operating pressure: 2,800 psi (193 bar). Maximum allowable test pressure: 4,200 psi (290 bar) — do NOT exceed."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["2,800 psi", "Valve-B", "H2-NEX-001"],
+      "negative_constraints": ["3,200 psi", "Valve-C", "2,200 psi"]
+    },
+    "source_documents": ["documents/supply_chain/BOM-FLT-H2NEX.md"],
+    "tags": ["h2-nexus", "valve-specifications", "safety", "pressure"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-003",
+    "complexity_level": 1,
+    "domain": "Governance — Regional Leadership",
+    "question": "Who is the current Vice President of Operations for the EMEA Division, and which hubs fall under their authority?",
+    "ground_truth_answer": "Marcus Vance is the Vice President of Operations for the EMEA Division. The EMEA Division includes the Frankfurt (FRA), Amsterdam (AMS), and Dubai (DXB) hubs, as specified in the Regional Governance Matrix RGM-2026, Table 2A.",
+    "required_context_nodes": [
+      {
+        "document_id": "RGM-2026-EMEA-VP",
+        "file_path": "documents/governance/RGM-2026_Regional_Governance_Matrix.md",
+        "critical_text_snippet": "EMEA Division (including Frankfurt, Amsterdam, and Dubai hubs): Marcus Vance, VP. Regional boundary clarifications: The Frankfurt hub falls under Marcus Vance's authority regardless of any prior contractual arrangements with local management."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["Marcus Vance", "EMEA", "Frankfurt"],
+      "negative_constraints": ["Sarah Jenkins", "Kenji Sato", "Latin America VP"]
+    },
+    "source_documents": ["documents/governance/RGM-2026_Regional_Governance_Matrix.md"],
+    "tags": ["leadership", "regional-structure", "emea", "executives"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-004",
+    "complexity_level": 1,
+    "domain": "Finance — Spending Authority",
+    "question": "What is the maximum per-transaction spending limit for a Regional Operations Director at AVL?",
+    "ground_truth_answer": "According to the Finance Authorization Framework FIN-AUTH-101, a Regional Operations Director has a per-transaction spending limit of $25,000 and a maximum per-month cumulative limit of $100,000. Budget variance allowed is 10% before requiring Regional VP approval.",
+    "required_context_nodes": [
+      {
+        "document_id": "FIN-AUTH-101",
+        "file_path": "documents/finance/FIN-AUTH-101_Authorization_Framework.md",
+        "critical_text_snippet": "Regional Operations Director: Max per Transaction: $25,000. Max per Month (Cumulative): $100,000. Budget Variance Allowed: 10%. Approval Required Above Limit: Regional VP."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["$25,000", "Regional Operations Director"],
+      "negative_constraints": ["$50,000", "$500,000", "Regional VP has the Director limit"]
+    },
+    "source_documents": ["documents/finance/FIN-AUTH-101_Authorization_Framework.md"],
+    "tags": ["spending-limits", "authorization", "regional-director"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-005",
+    "complexity_level": 1,
+    "domain": "HR — US Remote Work Stipend",
+    "question": "What is the maximum total annual remote work benefit for a US entity employee on full remote status, including all stipends and reimbursements?",
+    "ground_truth_answer": "Under the US entity policy (HR-POL-030), the maximum total annual remote work benefit is $5,320. This includes $4,200 base stipend (full remote at $350/month), $1,800 annual internet reimbursement ($80/month), excluding the one-time $1,200 equipment provision and the $150/month on-call surcharge if applicable.",
+    "required_context_nodes": [
+      {
+        "document_id": "HR-POL-030-US",
+        "file_path": "documents/hr/HR-POL-030_Remote_Work_US.md",
+        "critical_text_snippet": "Total Maximum Annual Stipend (US Entity): Under normal circumstances, the maximum total annual remote work benefit per employee is $5,320 ($4,200 base + $1,800 internet reimbursement, excluding the one-time equipment provision of $1,200 and the on-call surcharge of $150/month if applicable)."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["$5,320", "$4,200", "$1,800", "US entity"],
+      "negative_constraints": ["$3,000", "€3,000", "EMEA", "Germany"]
+    },
+    "source_documents": ["documents/hr/HR-POL-030_Remote_Work_US.md"],
+    "tags": ["remote-work", "stipend", "us-entity", "benefits"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-006",
+    "complexity_level": 1,
+    "domain": "Supply Chain — Critical Components",
+    "question": "Which H2-Nexus component is a sole-source item with no qualified alternate supplier, and why is this significant?",
+    "ground_truth_answer": "H2-NEX-007 (Emergency stop and isolation system) from SafetyFirst Industries is the sole-source component for the H2-Nexus system. This is significant because it represents a single point of failure — there is no alternate supplier. The document notes this is a 'regulatory requirement' that SafetyFirst Industries be the sole supplier.",
+    "required_context_nodes": [
+      {
+        "document_id": "BOM-FLT-H2NEX",
+        "file_path": "documents/supply_chain/BOM-FLT-H2NEX.md",
+        "critical_text_snippet": "H2-NEX-007: Emergency stop and isolation system: $12,000 x 1 unit. Source: SafetyFirst Industries (sole source — regulatory requirement)."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["H2-NEX-007", "SafetyFirst Industries", "sole source", "emergency stop"],
+      "negative_constraints": ["ATL-001", "Atlas Hydraulic", "sole source is H2-NEX-003"]
+    },
+    "source_documents": ["documents/supply_chain/BOM-FLT-H2NEX.md", "documents/supply_chain/AVL-PUR-012_Supplier_Qualification.md"],
+    "tags": ["sole-source", "supply-chain-risk", "h2-nexus", "critical-component"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-007",
+    "complexity_level": 1,
+    "domain": "Compliance — Regional Contacts",
+    "question": "Who is the Regional Compliance Officer for the EMEA division, and how should a breach be reported?",
+    "ground_truth_answer": "Dr. Klaus Richter is the Regional Compliance Officer for the EMEA division (Marcus Vance's region). Breaches should be reported through: (1) the AVL Compliance Hotline at 1-800-AVL-COMP (24/7, multilingual), (2) the AVL HR Portal via Form COM-015-BREACH, or (3) direct notification to the Regional Compliance Officer at k.richter@aerovelo-global.com.",
+    "required_context_nodes": [
+      {
+        "document_id": "SOP-COM-015",
+        "file_path": "documents/compliance/SOP-COM-015_Regulatory_Breach_Report.md",
+        "critical_text_snippet": "EMEA (Marcus Vance's region): Dr. Klaus Richter — k.richter@aerovelo-global.com. Reporting channels: AVL Compliance Hotline: 1-800-AVL-COMP (24/7, multilingual); AVL HR Portal: Form COM-015-BREACH; Direct notification to the Regional Compliance Officer."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["Dr. Klaus Richter", "EMEA", "1-800-AVL-COMP"],
+      "negative_constraints": ["Patricia Gomez", "Aisha Al-Rashid", "Marcus Vance (as compliance officer)"]
+    },
+    "source_documents": ["documents/compliance/SOP-COM-015_Regulatory_Breach_Report.md"],
+    "tags": ["breach-reporting", "regional-compliance", "contact-list", "comms"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-008",
+    "complexity_level": 1,
+    "domain": "HR — EMEA Remote Work Stipend",
+    "question": "What is the maximum total annual remote work benefit for an EMEA entity employee, and in what currency is it paid?",
+    "ground_truth_answer": "Under the EMEA entity policy (HR-POL-030-EMEA), the maximum total annual remote work benefit is €3,000 (approximately $3,200 USD). This includes €2,160 base stipend (full remote at €180/month), €600 annual internet reimbursement (€50/month), and €240 on-call surcharge (€80/month). All EMEA stipends are paid in EUR at the monthly exchange rate published by the European Central Bank.",
+    "required_context_nodes": [
+      {
+        "document_id": "HR-POL-030-EMEA",
+        "file_path": "documents/hr/HR-POL-030-EMEA_Remote_Work.md",
+        "critical_text_snippet": "Total Maximum Annual Stipend (EMEA Entity): Under normal circumstances, the maximum total annual remote work benefit per employee is €3,000 (€2,160 base + €600 internet + €240 on-call surcharge), which converts to approximately $3,200 USD at current exchange rates. All EMEA stipends are paid in EUR at the monthly exchange rate published by the European Central Bank on the first business day of each month."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["€3,000", "EUR", "€2,160", "$3,200 USD"],
+      "negative_constraints": ["$5,320", "$4,200", "US entity", "dollars (without USD qualifier)"]
+    },
+    "source_documents": ["documents/hr/HR-POL-030-EMEA_Remote_Work.md"],
+    "tags": ["remote-work", "stipend", "emea-entity", "currency", "benefits"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-009",
+    "complexity_level": 1,
+    "domain": "Governance PDF — EMEA Leadership Matrix",
+    "question": "In the RGM-2026 PDF, who is the EMEA regional VP and which hubs are listed under that VP?",
+    "ground_truth_answer": "The RGM-2026 PDF lists Marcus Vance as the EMEA regional VP. The hubs under the EMEA row are Frankfurt, Amsterdam, and Dubai.",
+    "required_context_nodes": [
+      {
+        "document_id": "RGM-2026-PDF-TABLE-2A-EMEA",
+        "file_path": "documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf",
+        "critical_text_snippet": "Table 2A — Regional Operational Leadership Assignments: EMEA | Marcus Vance | Frankfurt, Amsterdam, Dubai | $100,000 | $1,000,000."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["Marcus Vance", "EMEA", "Frankfurt", "Amsterdam", "Dubai"],
+      "negative_constraints": ["Sarah Jenkins", "Kenji Sato", "Dallas", "Tokyo"]
+    },
+    "source_documents": ["documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf"],
+    "tags": ["pdf", "visual-trap", "table-extraction", "governance", "emea"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-010",
+    "complexity_level": 1,
+    "domain": "Governance PDF — APAC Leadership Matrix",
+    "question": "According to the RGM-2026 PDF table, which VP owns APAC operations and what annual variance authority is shown for that row?",
+    "ground_truth_answer": "The RGM-2026 PDF lists Kenji Sato as the APAC VP. The APAC row shows an annual variance authority of $1,000,000.",
+    "required_context_nodes": [
+      {
+        "document_id": "RGM-2026-PDF-TABLE-2A-APAC",
+        "file_path": "documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf",
+        "critical_text_snippet": "Table 2A — Regional Operational Leadership Assignments: APAC | Kenji Sato | Tokyo, Singapore, Sydney | $100,000 | $1,000,000."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["Kenji Sato", "APAC", "$1,000,000", "Tokyo", "Singapore"],
+      "negative_constraints": ["Marcus Vance", "Sarah Jenkins", "$100,000 as annual variance"]
+    },
+    "source_documents": ["documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf"],
+    "tags": ["pdf", "visual-trap", "table-extraction", "governance", "apac"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-011",
+    "complexity_level": 1,
+    "domain": "Governance PDF — Critical Exception Protocol",
+    "question": "In the RGM-2026 PDF, what documentation is required for a Critical Exception expenditure above $10,000, and what happens if the Regional VP is unavailable for more than 8 hours?",
+    "ground_truth_answer": "For corrective expenditure exceeding $10,000, the Regional VP must provide formal written sign-off; verbal or phone approval is insufficient. The signed document must be filed in the AVL Global Incident Registry (GIR). If the designated Regional VP is unavailable for more than 8 hours, the matter escalates to the Chief Operating Officer.",
+    "required_context_nodes": [
+      {
+        "document_id": "RGM-2026-PDF-CRITICAL-EXCEPTION-PROTOCOL",
+        "file_path": "documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf",
+        "critical_text_snippet": "The Regional Vice President must provide formal written sign-off before any corrective expenditure exceeding $10,000 may be authorized. Verbal or phone approval is insufficient; a signed document must be filed in the AVL Global Incident Registry (GIR). If the designated Regional Vice President is unavailable for more than 8 hours, the matter escalates to the Chief Operating Officer."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["written sign-off", "$10,000", "GIR", "8 hours", "Chief Operating Officer"],
+      "negative_constraints": ["verbal approval is sufficient", "local manager", "24 hours", "CFO"]
+    },
+    "source_documents": ["documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf"],
+    "tags": ["pdf", "visual-trap", "critical-exception", "governance", "escalation"]
+  },
+  {
+    "eval_id": "AVL-2026-L1-012",
+    "complexity_level": 1,
+    "domain": "Governance PDF — Compliance Officer Roster",
+    "question": "Who is listed as the EMEA Compliance Officer in the RGM-2026 PDF, and what email address is provided?",
+    "ground_truth_answer": "The RGM-2026 PDF lists Dr. Klaus Richter as the EMEA Compliance Officer, with the email address k.richter@aerovelo-global.com.",
+    "required_context_nodes": [
+      {
+        "document_id": "RGM-2026-PDF-TABLE-2B-EMEA-COMPLIANCE",
+        "file_path": "documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf",
+        "critical_text_snippet": "Table 2B — Regional Compliance Officer Roster: EMEA | Dr. Klaus Richter | k.richter@aerovelo-global.com."
+      }
+    ],
+    "evaluation_rubric": {
+      "must_mention_keywords": ["Dr. Klaus Richter", "EMEA", "k.richter@aerovelo-global.com"],
+      "negative_constraints": ["Patricia Gomez", "Aisha Al-Rashid", "Marcus Vance"]
+    },
+    "source_documents": ["documents/pdfs/RGM-2026_Regional_Governance_Matrix.pdf"],
+    "tags": ["pdf", "visual-trap", "table-extraction", "compliance", "emea"]
+  }
+]

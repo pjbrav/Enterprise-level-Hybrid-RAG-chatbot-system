@@ -257,6 +257,13 @@ corpora(id TEXT PK, name, kind TEXT CHECK(kind IN ('hosted','personal')),
 
 ## Phase 2 — Hosting: OTP, membership, read-only retrieval API
 
+> **STATUS: DONE.** Deviations: the wire format carries each chunk's full text (capped at 8,000 chars), not text
+> truncated to `CONTEXT_CHARS_PER_CHUNK`, so confidence/validation on the member match a local run exactly;
+> host file paths are reduced to file names; one `HostServer` serves exactly one corpus (host two corpora = two
+> ports); `intensity` is accepted by `/v1/retrieve` but only takes effect in Phase 5; results gained a
+> `retrieval_path` key; the OTP/membership tables live in `data/state.db`. Verified: refactored pipeline == original
+> `_run_rag` on the 16 GB DB, locally and via wire format + `ChunkStore` (incl. forced last-resort rerank).
+
 ### 2.1 Engine refactor that remote retrieval depends on (`rag/engine.py`)
 Today `_run_rag` (:2384) mixes retrieval, `db` lookups and generation, so a
 member can't feed host chunks into it. Split it:

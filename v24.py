@@ -81,6 +81,12 @@ from rag.engine import (  # noqa: F401
     export_markdown,
     genai,
 )
+from rag.retrieval import (  # noqa: F401
+    ChunkStore,
+    RetrievalResult,
+    result_to_wire,
+    wire_to_result,
+)
 from rag.cli import (  # noqa: F401
     main,
     print_status,

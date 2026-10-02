@@ -31,6 +31,7 @@ from rag.config import CONTEXT_CHARS_PER_CHUNK, CROSS_ENCODER_RERANK_TOP_K, DATA
 from rag.text import clean_text, estimate_tokens, extract_entities, query_terms, stem_token
 from rag.db import ChunkMetadata, DatabaseManager
 from rag.ingest import DocumentProcessor
+from rag.retrieval import ChunkStore, RetrievalResult, result_to_wire
 from rag.rankers import CrossEncoderReranker, EmbeddingRanker, EntityKnowledgeGraph, vector_rank
 from rag.providers import ProviderConfig, available_provider_configs
 
@@ -542,7 +543,8 @@ class ComparisonEngine:
                 rankings.append(graph)
         return self._fuse_rankings(*rankings)
 
-    def _last_resort_rerank(self, query: str, ranked: List[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    def _last_resort_rerank(self, query: str, ranked: List[Tuple[str, float]],
+                            store: Optional[ChunkStore] = None) -> List[Tuple[str, float]]:
         """Tier 4: cross-encoder + on-demand embedding reranking, applied
         only to Hybrid's own top candidates (LAST_RESORT_CANDIDATE_POOL of
         them, never the full corpus) and only when Hybrid's own
@@ -554,7 +556,7 @@ class ComparisonEngine:
             return ranked
         top = ranked[: self.LAST_RESORT_CANDIDATE_POOL]
         chunk_ids = [cid for cid, _ in top]
-        texts = self.db.get_chunk_texts(chunk_ids)
+        texts = self._get_texts_batch(chunk_ids, store) if store is not None else self.db.get_chunk_texts(chunk_ids)
         if not texts:
             return ranked
         rankings = [top]
@@ -678,16 +680,21 @@ class ComparisonEngine:
     # -------------------------------------------------------------------------
     # Confidence, context, validation
     # -------------------------------------------------------------------------
-    def _get_texts_batch(self, chunk_ids: Sequence[str]) -> Dict[str, str]:
+    def _get_texts_batch(self, chunk_ids: Sequence[str], store: Optional[ChunkStore] = None) -> Dict[str, str]:
         """Fetch text for a small, specific set of chunk_ids (never the
-        whole corpus) -- from RAM in the small-corpus case, from the
-        database in lazy/large-corpus mode."""
+        whole corpus) -- from `store` when the chunks live outside this
+        engine's database (remote host / fused results), else from RAM in the
+        small-corpus case, else from the database in lazy/large-corpus mode."""
+        if store is not None:
+            return {cid: store.texts[cid] for cid in chunk_ids if cid in store.texts}
         if self.lazy:
             return self.db.get_chunk_texts(chunk_ids)
         return {cid: self.processor.chunk_texts[cid] for cid in chunk_ids if cid in self.processor.chunk_texts}
 
-    def _get_metadata_batch(self, chunk_ids: Sequence[str]) -> Dict[str, ChunkMetadata]:
+    def _get_metadata_batch(self, chunk_ids: Sequence[str], store: Optional[ChunkStore] = None) -> Dict[str, ChunkMetadata]:
         """Same idea as _get_texts_batch, for ChunkMetadata."""
+        if store is not None:
+            return {cid: store.meta[cid] for cid in chunk_ids if cid in store.meta}
         if self.lazy:
             return self.db.get_chunk_metadata_batch(chunk_ids)
         return {cid: self.processor.chunks_metadata[cid] for cid in chunk_ids if cid in self.processor.chunks_metadata}
@@ -697,13 +704,14 @@ class ComparisonEngine:
         chunk_ids: Sequence[str],
         normalised_scores: Sequence[float],
         require_cross_domain: bool,
+        store: Optional[ChunkStore] = None,
     ) -> float:
         if not chunk_ids or not normalised_scores:
             return 0.0
         strengths = [max(0.0, min(1.0, score)) for score in normalised_scores]
         average_strength = sum(strengths) / len(strengths)
         weakest_evidence = min(strengths)
-        metadata_batch = self._get_metadata_batch(chunk_ids)
+        metadata_batch = self._get_metadata_batch(chunk_ids, store)
         partitions = {meta.partition_id for meta in metadata_batch.values()}
         if require_cross_domain and len(partitions) < 2:
             return 0.0
@@ -725,9 +733,9 @@ class ComparisonEngine:
             return window[:best_end].strip()
         return window.rsplit(" ", 1)[0]
 
-    def _build_context(self, chunk_ids: Sequence[str]) -> str:
-        texts = self._get_texts_batch(chunk_ids)
-        metadata_batch = self._get_metadata_batch(chunk_ids)
+    def _build_context(self, chunk_ids: Sequence[str], store: Optional[ChunkStore] = None) -> str:
+        texts = self._get_texts_batch(chunk_ids, store)
+        metadata_batch = self._get_metadata_batch(chunk_ids, store)
         sections = []
         for chunk_id in chunk_ids:
             text = texts.get(chunk_id, "")
@@ -739,8 +747,8 @@ class ComparisonEngine:
             sections.append(f"[{chunk_id}|{partition}]\n{excerpt}")
         return "\n\n".join(sections)
 
-    def _source_summary(self, chunk_ids: Sequence[str]) -> List[str]:
-        metadata_batch = self._get_metadata_batch(chunk_ids)
+    def _source_summary(self, chunk_ids: Sequence[str], store: Optional[ChunkStore] = None) -> List[str]:
+        metadata_batch = self._get_metadata_batch(chunk_ids, store)
         sources = []
         for chunk_id in chunk_ids:
             metadata = metadata_batch.get(chunk_id)
@@ -758,17 +766,18 @@ class ComparisonEngine:
         context: str,
         chunk_ids: Sequence[str],
         require_cross_domain: bool,
+        store: Optional[ChunkStore] = None,
     ) -> bool:
         if not context.strip() or not chunk_ids:
             return False
         if require_cross_domain:
-            metadata_batch = self._get_metadata_batch(chunk_ids)
+            metadata_batch = self._get_metadata_batch(chunk_ids, store)
             partitions = {meta.partition_id for meta in metadata_batch.values()}
             if len(partitions) < 2:
                 return False
             query_entities = extract_entities(query)
             if query_entities:
-                texts_batch = self._get_texts_batch(chunk_ids)
+                texts_batch = self._get_texts_batch(chunk_ids, store)
                 for partition_id in partitions:
                     partition_text = " ".join(
                         texts_batch.get(chunk_id, "")
@@ -798,6 +807,7 @@ class ComparisonEngine:
         confidence_threshold: float,
         require_cross_domain: bool,
         max_chunks: int = MAX_CHUNKS,
+        store: Optional[ChunkStore] = None,
     ) -> Tuple[List[str], float]:
         ranked_chunks = list(ranked_chunks[:max_chunks])
         if not ranked_chunks:
@@ -812,23 +822,23 @@ class ComparisonEngine:
             if len(selected_ids) < min(2, len(ranked_chunks)):
                 continue
             confidence = self._calculate_confidence(
-                selected_ids, selected_scores, require_cross_domain
+                selected_ids, selected_scores, require_cross_domain, store
             )
-            context = self._build_context(selected_ids)
+            context = self._build_context(selected_ids, store)
             quality_ok = self._validate_answer_quality(
-                query, context, selected_ids, require_cross_domain
+                query, context, selected_ids, require_cross_domain, store
             )
             if confidence >= confidence_threshold and quality_ok:
                 return selected_ids, confidence
         return selected_ids, self._calculate_confidence(
-            selected_ids, selected_scores, require_cross_domain
+            selected_ids, selected_scores, require_cross_domain, store
         )
 
-    def _calculate_chunk_relevance(self, query: str, chunk_ids: Sequence[str]) -> float:
+    def _calculate_chunk_relevance(self, query: str, chunk_ids: Sequence[str], store: Optional[ChunkStore] = None) -> float:
         terms = query_terms(query)
         if not terms or not chunk_ids:
             return 0.0
-        texts_batch = self._get_texts_batch(chunk_ids)
+        texts_batch = self._get_texts_batch(chunk_ids, store)
         per_chunk = []
         for chunk_id in chunk_ids:
             text = texts_batch.get(chunk_id, "").lower()
@@ -947,7 +957,13 @@ class ComparisonEngine:
     # -------------------------------------------------------------------------
     # Main RAG execution (FORCED HYBRID – no cheap router)
     # -------------------------------------------------------------------------
-    def _run_rag(self, query: str, method: str, use_hybrid: bool, provider_configs: List[ProviderConfig]) -> Dict[str, Any]:
+    # -------------------------------------------------------------------------
+    # The RAG pipeline in three steps. _run_rag() composes them for the local
+    # case; a member that fuses remote + local candidates calls the steps
+    # itself (retrieve on each side, fuse, then select/answer with a ChunkStore).
+    # -------------------------------------------------------------------------
+    def retrieve(self, query: str, use_hybrid: bool) -> RetrievalResult:
+        """Step 1: ranked candidates for this engine's own corpus."""
         start = time.perf_counter()
         is_cross_domain = self._is_cross_domain_question(query) if use_hybrid else False
         threshold = self._get_adaptive_threshold(query, is_cross_domain)
@@ -961,58 +977,83 @@ class ComparisonEngine:
             # are judged on comparable footing (see _calibrate_hybrid_confidence).
             calibrated_scores = self._calibrate_hybrid_confidence([score for _, score in ranked])
             ranked = list(zip((chunk_id for chunk_id, _ in ranked), calibrated_scores))
-            chunk_ids, confidence = self._intelligent_retrieve(
-                ranked, query, threshold, is_cross_domain, max_chunks
-            )
-            retrieval_path = "hybrid"
-            # Tier 4 (large-corpus mode only): the disk-backed FTS5+graph
-            # Hybrid tier above never touches cross-encoder/embeddings --
-            # that's what keeps its latency low across the whole query set.
-            # If ITS OWN confidence still isn't good enough, escalate just
-            # this query's own top candidates (never the full corpus) to
-            # cross-encoder + on-demand embedding reranking, as a rare
-            # last resort rather than a per-query default.
-            if self.lazy and confidence < self.ROUTER_LAST_RESORT_THRESHOLD and (
-                self.cross_encoder.model is not None or self.embedding_ranker.model is not None
-            ):
-                reranked = self._last_resort_rerank(query, ranked)
-                escalated_ids, escalated_confidence = self._intelligent_retrieve(
-                    reranked, query, threshold, is_cross_domain, max_chunks
-                )
-                if escalated_confidence > confidence:
-                    chunk_ids, confidence = escalated_ids, escalated_confidence
-                    retrieval_path = "hybrid_last_resort"
         else:
             # Standard RAG (lexical only: TF-IDF in-memory, or FTS5 disk-backed)
             candidate_ids = None if self.lazy else list(self.processor.chunk_texts)
             ranked = self._rank_candidates(query, candidate_ids, False)
-            chunk_ids, confidence = self._intelligent_retrieve(
-                ranked, query, threshold, is_cross_domain, max_chunks
-            )
-            retrieval_path = "standard_rag"
+        return RetrievalResult(ranked, is_cross_domain, threshold, max_chunks, use_hybrid, start)
 
-        context = self._build_context(chunk_ids)
-        answer, generation_info = self._generate_answer(query, context, method, provider_configs)
-        latency = time.perf_counter() - start
-        quality_validated = self._validate_answer_quality(
-            query, context, chunk_ids, is_cross_domain
+    def select(self, query: str, result: RetrievalResult,
+               store: Optional[ChunkStore] = None) -> Tuple[List[str], float, str]:
+        """Step 2: pick the chunks that go to the LLM. Returns
+        (chunk_ids, confidence, retrieval_path)."""
+        store = store if store is not None else result.store
+        chunk_ids, confidence = self._intelligent_retrieve(
+            result.ranked, query, result.threshold, result.is_cross_domain, result.max_chunks, store=store
         )
+        if not result.use_hybrid:
+            return chunk_ids, confidence, "standard_rag"
+        retrieval_path = "hybrid"
+        # Tier 4 (large-corpus mode only): the disk-backed FTS5+graph
+        # Hybrid tier above never touches cross-encoder/embeddings --
+        # that's what keeps its latency low across the whole query set.
+        # If ITS OWN confidence still isn't good enough, escalate just
+        # this query's own top candidates (never the full corpus) to
+        # cross-encoder + on-demand embedding reranking, as a rare
+        # last resort rather than a per-query default.
+        if self.lazy and confidence < self.ROUTER_LAST_RESORT_THRESHOLD and (
+            self.cross_encoder.model is not None or self.embedding_ranker.model is not None
+        ):
+            reranked = self._last_resort_rerank(query, result.ranked, store)
+            escalated_ids, escalated_confidence = self._intelligent_retrieve(
+                reranked, query, result.threshold, result.is_cross_domain, result.max_chunks, store=store
+            )
+            if escalated_confidence > confidence:
+                chunk_ids, confidence = escalated_ids, escalated_confidence
+                retrieval_path = "hybrid_last_resort"
+        return chunk_ids, confidence, retrieval_path
 
+    def answer(self, query: str, method: str, result: RetrievalResult, chunk_ids: Sequence[str],
+               confidence: float, retrieval_path: str, provider_configs: List[ProviderConfig],
+               store: Optional[ChunkStore] = None) -> Dict[str, Any]:
+        """Step 3: build the context, generate, and score."""
+        store = store if store is not None else result.store
+        context = self._build_context(chunk_ids, store)
+        answer, generation_info = self._generate_answer(query, context, method, provider_configs)
+        latency = time.perf_counter() - result.start
+        quality_validated = self._validate_answer_quality(
+            query, context, chunk_ids, result.is_cross_domain, store
+        )
         return {
             "answer": answer,
             "chunks_retrieved": len(chunk_ids),
             "tokens_used": estimate_tokens(context),
             "latency": latency,
-            "chunk_ids": chunk_ids,
-            "relevance_score": self._calculate_chunk_relevance(query, chunk_ids),
+            "chunk_ids": list(chunk_ids),
+            "relevance_score": self._calculate_chunk_relevance(query, chunk_ids, store),
             "answer_relevance": self._calculate_answer_relevance(query, answer),
             "confidence_score": confidence,
-            "threshold_used": threshold,
+            "threshold_used": result.threshold,
             "quality_validated": quality_validated,
-            "cross_domain": is_cross_domain,
-            "sources": self._source_summary(chunk_ids),
+            "cross_domain": result.is_cross_domain,
+            "sources": self._source_summary(chunk_ids, store),
             "generation": generation_info,
+            "retrieval_path": retrieval_path,
         }
+
+    def _run_rag(self, query: str, method: str, use_hybrid: bool, provider_configs: List[ProviderConfig]) -> Dict[str, Any]:
+        result = self.retrieve(query, use_hybrid)
+        chunk_ids, confidence, retrieval_path = self.select(query, result)
+        return self.answer(query, method, result, chunk_ids, confidence, retrieval_path, provider_configs)
+
+    def retrieve_for_remote(self, query: str, method: str = "hybrid", pool: int = 20) -> Dict[str, Any]:
+        """What a host serves to a member: the top `pool` ranked chunks with
+        their texts (JSON-ready), no selection and no generation."""
+        result = self.retrieve(query, use_hybrid=(method != "standard"))
+        top_ids = [cid for cid, _ in result.ranked[:pool]]
+        texts = self._get_texts_batch(top_ids)
+        meta = self._get_metadata_batch(top_ids)
+        return result_to_wire(result, texts, meta, pool, time.perf_counter() - result.start)
 
     def _hybrid_rag(self, query: str, provider_configs: List[ProviderConfig]) -> Dict[str, Any]:
         return self._run_rag(query, "Hybrid RAG", use_hybrid=True, provider_configs=provider_configs)

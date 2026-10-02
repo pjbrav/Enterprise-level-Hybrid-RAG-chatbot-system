@@ -9,18 +9,53 @@ from another machine.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import hmac
 import json
+import secrets
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from rag.config import STATE_DB_PATH
 
 CORPUS_KINDS = ("hosted", "personal")
 BACKENDS = ("sqlite", "postgres")
+
+# OTP policy. A 6-digit code is only 10^6 possibilities, so guessing is limited
+# per IP, and a burst of failures anywhere revokes every outstanding code.
+OTP_TTL_SECONDS = 30 * 60
+OTP_MAX_USES = 10
+MAX_FAILED_JOINS_PER_IP = 5
+FAILED_JOIN_WINDOW_SECONDS = 10 * 60
+AUTO_REVOKE_FAILURES = 50
+AUTO_REVOKE_WINDOW_SECONDS = 30 * 60
+
+
+class OtpError(Exception):
+    """Join refused (bad / expired / used-up code)."""
+
+
+class RateLimited(OtpError):
+    """Too many failed join attempts from this address."""
+
+
+@dataclass
+class Membership:
+    id: int
+    corpus_id: str
+    display_name: str
+    ip: str
+    joined_at: str
+    last_seen: str
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -67,6 +102,30 @@ class StateStore:
                 "retained INTEGER NOT NULL DEFAULT 1, "
                 "partition_keywords_json TEXT NOT NULL DEFAULT '{}', "
                 "created_at TEXT NOT NULL)"
+            )
+            # Host-side only: members never receive these tables' contents.
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS otp_codes ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, corpus_id TEXT NOT NULL, "
+                "code_hash TEXT NOT NULL, salt TEXT NOT NULL, expires_at REAL NOT NULL, "
+                "max_uses INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0, "
+                "revoked INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS memberships ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, corpus_id TEXT NOT NULL, "
+                "display_name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, ip TEXT NOT NULL, "
+                "joined_at REAL NOT NULL, last_seen REAL NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS join_attempts ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, corpus_id TEXT NOT NULL, "
+                "ip TEXT NOT NULL, ts REAL NOT NULL, success INTEGER NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS security_events ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, corpus_id TEXT NOT NULL, "
+                "ts REAL NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL)"
             )
 
     # -- corpora -----------------------------------------------------------
@@ -139,3 +198,144 @@ class StateStore:
     def delete_corpus(self, corpus_id: str) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM corpora WHERE id = ?", (corpus_id,))
+
+    # -- OTP codes ------------------------------------------------------------
+    def issue_otp(self, corpus_id: str, ttl_seconds: int = OTP_TTL_SECONDS,
+                  max_uses: int = OTP_MAX_USES) -> Tuple[str, float]:
+        """Create a 6-digit one-time code. Returns (plaintext code, expires_at);
+        only a salted hash is stored, so the code cannot be shown again."""
+        now = time.time()
+        with self._conn() as conn:
+            active = conn.execute(
+                "SELECT salt, code_hash FROM otp_codes WHERE corpus_id = ? AND revoked = 0 "
+                "AND expires_at > ? AND uses < max_uses", (corpus_id, now)).fetchall()
+            while True:  # avoid two simultaneously valid identical codes
+                code = f"{secrets.randbelow(10 ** 6):06d}"
+                if not any(hmac.compare_digest(_sha256(r["salt"] + code), r["code_hash"]) for r in active):
+                    break
+            salt = secrets.token_hex(8)
+            expires_at = now + ttl_seconds
+            conn.execute(
+                "INSERT INTO otp_codes (corpus_id, code_hash, salt, expires_at, max_uses, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (corpus_id, _sha256(salt + code), salt, expires_at, max_uses, now))
+        return code, expires_at
+
+    def revoke_all_otps(self, corpus_id: str) -> int:
+        with self._conn() as conn:
+            cur = conn.execute("UPDATE otp_codes SET revoked = 1 WHERE corpus_id = ? AND revoked = 0", (corpus_id,))
+            return cur.rowcount
+
+    def rotate_otp(self, corpus_id: str, ttl_seconds: int = OTP_TTL_SECONDS,
+                   max_uses: int = OTP_MAX_USES) -> Tuple[str, float]:
+        """Invalidate every outstanding code and issue a fresh one.
+        Existing members stay; only kick removes them."""
+        self.revoke_all_otps(corpus_id)
+        return self.issue_otp(corpus_id, ttl_seconds, max_uses)
+
+    def active_otp_count(self, corpus_id: str) -> int:
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM otp_codes WHERE corpus_id = ? AND revoked = 0 AND expires_at > ? "
+                "AND uses < max_uses", (corpus_id, time.time())).fetchone()[0]
+
+    # -- join (redeem) ---------------------------------------------------------
+    def redeem_otp(self, corpus_id: str, code: str, display_name: str, ip: str) -> Tuple[str, Membership]:
+        """Exchange a valid OTP for a membership token (returned once).
+        Raises RateLimited / OtpError. Failures are counted per IP."""
+        now = time.time()
+        with self._conn() as conn:
+            failures = conn.execute(
+                "SELECT COUNT(*) FROM join_attempts WHERE corpus_id = ? AND ip = ? AND success = 0 AND ts > ?",
+                (corpus_id, ip, now - FAILED_JOIN_WINDOW_SECONDS)).fetchone()[0]
+        if failures >= MAX_FAILED_JOINS_PER_IP:
+            raise RateLimited("Too many failed attempts; try again later.")
+
+        code = (code or "").strip()
+        matched_id = None
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, salt, code_hash FROM otp_codes WHERE corpus_id = ? AND revoked = 0 "
+                "AND expires_at > ? AND uses < max_uses", (corpus_id, now)).fetchall()
+            for r in rows:
+                if hmac.compare_digest(_sha256(r["salt"] + code), r["code_hash"]):
+                    # claim a use atomically (guards against concurrent redemptions)
+                    cur = conn.execute("UPDATE otp_codes SET uses = uses + 1 WHERE id = ? AND uses < max_uses", (r["id"],))
+                    if cur.rowcount:
+                        matched_id = r["id"]
+                    break
+            conn.execute("INSERT INTO join_attempts (corpus_id, ip, ts, success) VALUES (?, ?, ?, ?)",
+                         (corpus_id, ip, now, int(matched_id is not None)))
+        if matched_id is None:
+            self._maybe_auto_revoke(corpus_id, now)
+            raise OtpError("Invalid or expired code.")
+
+        name = (display_name or "").strip()[:40] or "member"
+        token = secrets.token_urlsafe(32)
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO memberships (corpus_id, display_name, token_hash, ip, joined_at, last_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (corpus_id, name, _sha256(token), ip, now, now))
+            member_id = cur.lastrowid
+        return token, self._membership(member_id)
+
+    def _maybe_auto_revoke(self, corpus_id: str, now: float) -> None:
+        with self._conn() as conn:
+            last = conn.execute("SELECT MAX(ts) FROM security_events WHERE corpus_id = ? AND kind = 'otp_auto_revoked'",
+                                (corpus_id,)).fetchone()[0] or 0.0
+            since = max(now - AUTO_REVOKE_WINDOW_SECONDS, last)
+            failures = conn.execute(
+                "SELECT COUNT(*) FROM join_attempts WHERE corpus_id = ? AND success = 0 AND ts > ?",
+                (corpus_id, since)).fetchone()[0]
+        if failures >= AUTO_REVOKE_FAILURES:
+            revoked = self.revoke_all_otps(corpus_id)
+            with self._conn() as conn:
+                conn.execute("INSERT INTO security_events (corpus_id, ts, kind, detail) VALUES (?, ?, ?, ?)",
+                             (corpus_id, now, "otp_auto_revoked",
+                              f"{failures} failed join attempts; revoked {revoked} outstanding code(s)."))
+
+    def security_events(self, corpus_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT ts, kind, detail FROM security_events WHERE corpus_id = ? "
+                                "ORDER BY ts DESC LIMIT ?", (corpus_id, limit)).fetchall()
+        return [{"ts": r["ts"], "kind": r["kind"], "detail": r["detail"]} for r in rows]
+
+    # -- members ----------------------------------------------------------------
+    @staticmethod
+    def _iso(ts: float) -> str:
+        return datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+
+    def _membership(self, member_id: int) -> Membership:
+        with self._conn() as conn:
+            r = conn.execute("SELECT * FROM memberships WHERE id = ?", (member_id,)).fetchone()
+        return Membership(r["id"], r["corpus_id"], r["display_name"], r["ip"],
+                          self._iso(r["joined_at"]), self._iso(r["last_seen"]))
+
+    def verify_token(self, token: str, corpus_id: Optional[str] = None, touch: bool = True) -> Optional[Membership]:
+        """Resolve a bearer token to a live membership (None if unknown or kicked)."""
+        if not token:
+            return None
+        with self._conn() as conn:
+            r = conn.execute("SELECT * FROM memberships WHERE token_hash = ?", (_sha256(token),)).fetchone()
+            if r is None or (corpus_id is not None and r["corpus_id"] != corpus_id):
+                return None
+            if touch:
+                conn.execute("UPDATE memberships SET last_seen = ? WHERE id = ?", (time.time(), r["id"]))
+        return self._membership(r["id"])
+
+    def list_members(self, corpus_id: str) -> List[Membership]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT id FROM memberships WHERE corpus_id = ? ORDER BY joined_at", (corpus_id,)).fetchall()
+        return [self._membership(r["id"]) for r in rows]
+
+    def kick(self, member_id: int) -> bool:
+        """Delete a membership; its token stops working immediately."""
+        with self._conn() as conn:
+            return conn.execute("DELETE FROM memberships WHERE id = ?", (member_id,)).rowcount > 0
+
+    def remove_all_members(self, corpus_id: str) -> int:
+        with self._conn() as conn:
+            return conn.execute("DELETE FROM memberships WHERE corpus_id = ?", (corpus_id,)).rowcount
+
+    def leave(self, token: str) -> bool:
+        with self._conn() as conn:
+            return conn.execute("DELETE FROM memberships WHERE token_hash = ?", (_sha256(token),)).rowcount > 0
